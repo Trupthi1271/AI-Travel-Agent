@@ -122,7 +122,7 @@ def _amadeus_base(env: str) -> str:
 def _get_amadeus_token(api_key: str, api_secret: str, env: str) -> Optional[str]:
     url = f"{_amadeus_base(env)}/v1/security/oauth2/token"
     data = {"grant_type": "client_credentials", "client_id": api_key, "client_secret": api_secret}
-    r = requests.post(url, data=data, timeout=15)
+    r = requests.post(url, data=data, timeout=8)
     r.raise_for_status()
     return r.json().get("access_token")
 
