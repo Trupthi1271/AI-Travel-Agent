@@ -1,4 +1,45 @@
-# Environment variables
+Track B: Advanced (For Confident Teams)
+Focus: Industry-ready skills, complex architecture
+Domain: Full Travel Concierge with multiple specializations
+APIs: 4+ integrations with error handling
+Framework: LangGraph for complex workflows
+UI: Professional React/Next.js interface
+Deployment: Multi-service architecture with monitoring
+can we do basic of this track if yes then lets do for week 1-4 only here is the tasks to be done
+Week 1-2: Foundation & Quick Win
+Goal: Get something working and deployed early
+Track A Checklist:
+[ ] Create GitHub repo with proper structure
+[ ] Set up development environment (Python, LangChain, Streamlit)
+[ ] Build basic RAG chatbot with document upload
+[ ] Deploy on Streamlit Cloud
+[ ] Record 2-minute demo video
+[ ] Milestone: Working deployed demo link
+Track B Checklist:
+[ ] All Track A requirements plus:
+[ ] Set up advanced development environment (LangGraph, monitoring tools)
+[ ] Implement basic agent with function calling
+[ ] Add error logging and basic monitoring
+[ ] Set up CI/CD pipeline basics
+Week 3-4: Core Agent Architecture
+Goal: Transform into a tool-using agent
+Track A Checklist:
+[ ] Integrate 2 tools (web search + one API of choice)
+[ ] Implement basic tool calling with LangChain
+[ ] Add simple error handling
+[ ] Create tool testing scripts
+[ ] Update deployment with new features
+[ ] Milestone: Agent uses multiple tools correctly
+Track B Checklist:
+[ ] All Track A requirements plus:
+[ ] Implement complex agent workflow with LangGraph
+[ ] Add 3+ tools with sophisticated error handling
+[ ] Implement agent state management
+[ ] Add performance monitoring and logging
+[ ] Create comprehensive test suite
+
+check that all works better aand good atleast the basic functions workk properly 
+do it step by step by setting up environment then deep diving# Environment variables
 .env
 .ENV
 
@@ -58,6 +99,10 @@ database/tripweaver.db
 *.faiss
 *.pkl
 faiss_index/
+
+# Logs
+logs/
+*.log
 
 # Streamlit secrets (keep example, ignore real secrets)
 .streamlit/secrets.toml
