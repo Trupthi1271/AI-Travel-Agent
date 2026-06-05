@@ -38,11 +38,21 @@ CATEGORY_LABELS: Dict[str, str] = {
 # Static fallback data for popular Indian cities (used when no API key)
 _STATIC_PLACES: Dict[str, List[Dict]] = {
     "goa": [
-        {"name": "Baga Beach", "category": "natural", "description": "Popular beach known for water sports and nightlife."},
-        {"name": "Basilica of Bom Jesus", "category": "historic", "description": "UNESCO World Heritage Site, 16th-century church."},
-        {"name": "Fort Aguada", "category": "historic", "description": "17th-century Portuguese fort with lighthouse."},
-        {"name": "Dudhsagar Falls", "category": "natural", "description": "One of India's tallest waterfalls, 310m high."},
-        {"name": "Anjuna Flea Market", "category": "shops", "description": "Famous Wednesday market for handicrafts and clothes."},
+        {"name": "Baga Beach",              "category": "natural",      "description": "Popular beach known for water sports and nightlife."},
+        {"name": "Palolem Beach",            "category": "natural",      "description": "Secluded crescent beach with calm waters, great for swimming."},
+        {"name": "Anjuna Beach",             "category": "natural",      "description": "Famous Wednesday flea market and scenic rocky beach."},
+        {"name": "Calangute Beach",          "category": "natural",      "description": "Largest beach in Goa, bustling with restaurants and shops."},
+        {"name": "Vagator Beach",            "category": "natural",      "description": "Dramatic red cliffs and clear waters, quieter than Baga."},
+        {"name": "Dudhsagar Falls",          "category": "natural",      "description": "One of India's tallest waterfalls, 310m high — stunning after rain."},
+        {"name": "Basilica of Bom Jesus",    "category": "historic",     "description": "UNESCO World Heritage Site, 16th-century church with St. Francis Xavier's remains."},
+        {"name": "Se Cathedral",             "category": "historic",     "description": "One of Asia's largest churches, built by the Portuguese in 1619."},
+        {"name": "Fort Aguada",              "category": "historic",     "description": "17th-century Portuguese fort with lighthouse and Arabian Sea views."},
+        {"name": "Chapora Fort",             "category": "historic",     "description": "Iconic hilltop fort with panoramic views — made famous by Dil Chahta Hai."},
+        {"name": "Goa State Museum",         "category": "cultural",     "description": "Showcases Goa's history, art, and culture across multiple galleries."},
+        {"name": "Anjuna Flea Market",       "category": "shops",        "description": "Famous Wednesday market for handicrafts, clothes, and souvenirs."},
+        {"name": "Spice Plantation Tour",    "category": "natural",      "description": "Guided tour through tropical spice gardens with lunch included."},
+        {"name": "Dolphin Watching Cruise",  "category": "amusements",   "description": "Boat tour to spot dolphins in the Arabian Sea — best in the morning."},
+        {"name": "Mangeshi Temple",          "category": "religion",     "description": "Largest and most visited Hindu temple in Goa, dedicated to Lord Shiva."},
     ],
     "jaipur": [
         {"name": "Amber Fort", "category": "historic", "description": "Majestic hilltop fort with stunning architecture."},
@@ -111,7 +121,7 @@ def _fetch_opentripmap(lat: float, lon: float, api_key: str, radius: int = 10000
         "limit": 15,
         "apikey": api_key,
     }
-    r = requests.get(url, params=params, timeout=15)
+    r = requests.get(url, params=params, timeout=8)
     r.raise_for_status()
     data = r.json()
 
@@ -139,23 +149,27 @@ def _static_fallback(city: str) -> List[Dict]:
 def get_places(city: str) -> str:
     """
     Get top tourist attractions and points of interest for a city.
-    Uses OpenTripMap API if OPENTRIPMAP_API_KEY is set, otherwise static data.
+    Uses static curated data for well-known cities (better quality),
+    falls back to OpenTripMap API for other cities.
     """
     api_key = os.getenv("OPENTRIPMAP_API_KEY")
 
-    places: List[Dict] = []
-
-    if api_key:
+    # Always try static data first for known cities — it's curated and higher quality
+    static = _static_fallback(city)
+    if static:
+        places = static
+    elif api_key:
+        # Use OpenTripMap only for cities not in static list
         try:
             loc = _geocode_city(city)
             if loc:
                 places = _fetch_opentripmap(loc["lat"], loc["lon"], api_key)
-        except Exception as exc:
-            # Fall through to static data
+            else:
+                places = []
+        except Exception:
             places = []
-
-    if not places:
-        places = _static_fallback(city)
+    else:
+        places = []
 
     if not places:
         return (
@@ -173,12 +187,12 @@ def get_places(city: str) -> str:
             f"• **{p['name']}**" + (f" — {p['description']}" if p.get("description") else "")
         )
 
-    lines = [f"🗺️ **Top Attractions in {city.title()}**\n"]
+    lines = [f"## 🗺️ Top Places in {city.title()}\n"]
     for label, items in grouped.items():
-        lines.append(f"**{label}**")
+        lines.append(f"### {label}")
         lines.extend(items)
         lines.append("")
 
-    source = "OpenTripMap" if api_key else "curated data"
+    source = "curated data" if static else "OpenTripMap"
     lines.append(f"_Source: {source}_")
     return "\n".join(lines).strip()

@@ -7,7 +7,7 @@ def _geocode_city(city: str) -> Optional[Dict]:
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": city, "format": "json", "limit": 1}
     headers = {"User-Agent": USER_AGENT}
-    r = requests.get(url, params=params, headers=headers, timeout=15)
+    r = requests.get(url, params=params, headers=headers, timeout=8)
     r.raise_for_status()
     data = r.json()
     if not data:
@@ -18,28 +18,25 @@ def _geocode_city(city: str) -> Optional[Dict]:
 def _query_overpass_hotels(bbox: List[float]) -> List[Dict]:
     south, north, west, east = bbox
     query = f"""
-    [out:json][timeout:25];
+    [out:json][timeout:10];
     (node["tourism"~"hotel|guest_house|hostel"]({south},{west},{north},{east});
      way["tourism"~"hotel|guest_house|hostel"]({south},{west},{north},{east});
      relation["tourism"~"hotel|guest_house|hostel"]({south},{west},{north},{east});
     );
-    out center 30;
+    out center 20;
     """
     endpoints = [
         "https://overpass-api.de/api/interpreter",
         "https://overpass.kumi.systems/api/interpreter",
-        "https://overpass.openstreetmap.ru/api/interpreter",
     ]
     headers = {"User-Agent": USER_AGENT}
-    last_err = None
     for url in endpoints:
         try:
-            r = requests.post(url, data=query, headers=headers, timeout=45)
+            r = requests.post(url, data=query, headers=headers, timeout=12)
             r.raise_for_status()
             data = r.json()
             break
-        except Exception as e:
-            last_err = e
+        except Exception:
             data = {}
             continue
     elements = data.get("elements", [])

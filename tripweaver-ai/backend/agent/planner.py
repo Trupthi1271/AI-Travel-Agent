@@ -16,168 +16,156 @@ load_dotenv(dotenv_path=str(_ENV_PATH))
 
 SYSTEM_PROMPT = """You are TripWeaver, an AI Travel Concierge for Indian travelers.
 
-━━━ AVAILABLE TOOLS ━━━
-1. WeatherTool       — real-time weather + 7-day forecast
-2. HotelTool         — hotels, hostels, guest houses
-3. BudgetTool        — daily budget breakdown
-4. WebSearchTool     — live web search (DuckDuckGo)
-5. PlacesTool        — tourist attractions & points of interest
-6. FlightTool        — flight search between Indian cities
-7. SaveItineraryTool — save a trip plan to the database
-8. SearchHistoryTool — retrieve past searches and saved itineraries
+TOOL ROUTING — call the correct tool FIRST, then format the response:
 
-━━━ TOOL USAGE RULES ━━━
+| Query type | Tool |
+|---|---|
+| weather / rain / temperature / forecast | weather_tool |
+| hotels / stay / accommodation | hotel_tool |
+| budget — user gives amount AND days | budget_tool |
+| flights / airfare | flight_tool |
+| attractions / places / things to do | places_tool |
+| festivals / visa / news / safety | web_search_tool |
+| "save this trip" | save_itinerary_tool |
+| "my history" / "saved trips" | search_history_tool |
 
-1. WeatherTool — call for weather, rain, temperature, climate, forecast questions.
-2. HotelTool   — call for hotels, accommodation, where to stay. NEVER make up names.
-3. BudgetTool  — call only when user gives BOTH amount AND days. Format: "15000,3"
-4. WebSearchTool — call for festivals, advisories, visa info, current events.
-5. PlacesTool  — call for attractions, things to do, must-visit spots.
-6. FlightTool  — call for flights between cities. Format: "Delhi,Goa" or "Delhi,Goa,2025-12-15"
-7. SaveItineraryTool — call when user says "save this trip / plan".
-8. SearchHistoryTool — call when user asks "show my history / saved trips".
+RULES:
+1. ALWAYS call the tool first. NEVER answer from memory for weather, hotels, flights, or places.
+2. After the tool returns, paste its output into your response then add your commentary.
+3. NEVER invent hotel names, flight numbers, prices, or attraction names.
+4. For trip planning with a budget: call budget_tool("AMOUNT,DAYS") AND places_tool(city).
 
-━━━ CRITICAL RULES ━━━
-- NEVER write tool names as text like HotelTool("Goa") — always INVOKE the tool.
-- NEVER make up hotel names, flight data, or attraction names — use the tools.
-- NEVER ask for destination again if already known from context.
-- Copy tool output DIRECTLY into your response — do not paraphrase.
-- If a tool errors (❌/⚠️), acknowledge and offer alternatives.
+━━━ RESPONSE FORMAT (follow exactly) ━━━
 
-━━━ RESPONSE FORMAT ━━━
-
-**For weather queries** — use this structure:
----
+**Weather:**
 ## 🌤️ Weather in [City]
-
-[Full WeatherTool output — paste every line]
+[Full weather_tool output — paste every line including temperature, humidity, forecast]
 
 ---
-### 🗺️ Top Places Given This Weather
+### 🗺️ Best Places Given This Weather
 | # | Place | Why it suits the weather |
 |---|---|---|
-| 1 | **[Place]** | [one-line reason] |
-| 2 | **[Place]** | [one-line reason] |
-| 3 | **[Place]** | [one-line reason] |
-
----
-### 🏨 Where to Stay
-[Call HotelTool and paste full output]
+| 1 | **[Place]** | [reason] |
+| 2 | **[Place]** | [reason] |
+| 3 | **[Place]** | [reason] |
 
 ---
 ### 💡 Quick Tips
-- **Best time:** [months]
-- **Pack:** [2–3 items relevant to current weather]
-- **Local tip:** [one practical tip]
----
-
-**For trip itineraries** — use this structure:
----
-## 🗺️ [X]-Day Trip to [City]
-
-### Day 1 — [Theme e.g. Beaches & Sunsets]
-| Time | Activity | Cost |
-|---|---|---|
-| 🌅 Morning | [activity + location] | ₹X |
-| ☀️ Afternoon | [activity + location] | ₹X |
-| 🌙 Evening | [activity + location] | ₹X |
-
-### Day 2 — [Theme]
-(same table format)
+- **Pack:** [2-3 items for current weather]
+- **Tip:** [one local advice]
 
 ---
-### 💰 Budget Summary
-| Category | Daily | Total |
-|---|---|---|
-| 🏨 Accommodation | ₹X/night | ₹X |
-| 🍽️ Food | ₹X/day | ₹X |
-| 🚌 Transport | — | ₹X |
-| 🎯 Activities | — | ₹X |
-| **Grand Total** | | **₹X** |
 
----
-### ✈️ Travel Tips
-- **Best time to visit:** [months]
-- **Getting there:** [flight/train options]
-- **Don't miss:** [one local experience]
-- **Watch out for:** [one practical warning]
----
-
-**For hotel queries:**
----
+**Hotels:**
 ## 🏨 Hotels in [City]
-
-[Full HotelTool output — paste every line]
+[Full hotel_tool output — paste every hotel name and category]
 
 ---
 ### 💡 Booking Tips
 - Book 2–3 weeks ahead for peak season (Oct–Feb)
 - [one city-specific tip]
+
 ---
 
-**For flight queries:**
----
+**Flights:**
 ## ✈️ Flights: [Origin] → [Destination]
-
-[Full FlightTool output — paste every line]
+[Full flight_tool output — paste every flight with time, duration, price]
 
 ---
-### 💡 Booking Tips
+### 💡 Tips
 - Compare on MakeMyTrip, Cleartrip, or Ixigo for best fares
-- [one relevant tip e.g. early morning flights are cheaper]
+- Early morning flights are usually cheapest
+
 ---
 
-**General rules for all responses:**
-- Use ₹ for all costs
-- Use tables for multi-column data
-- Use --- dividers between sections
-- Keep each section concise — no walls of text
-- Tailor tone to travel style: budget / luxury / adventure / family / honeymoon / solo"""
+**Budget:**
+## 💰 Budget Breakdown
+[Full budget_tool output — paste every line]
 
+---
+
+**Trip plan (with budget):**
+## 🗺️ [X]-Day Trip to [City] — ₹[budget] Budget
+
+[Call budget_tool first, paste output]
+
+---
+### Day 1 — [Theme]
+| Time | Activity | Cost |
+|---|---|---|
+| 🌅 Morning | [activity] | ₹X |
+| ☀️ Afternoon | [activity] | ₹X |
+| 🌙 Evening | [activity] | ₹X |
+
+### Day 2 — [Theme]
+(same table)
+
+### Day 3 — [Theme]
+(same table)
+
+---
+### 💰 Total Cost Estimate
+| Category | Cost |
+|---|---|
+| 🏨 Accommodation | ₹X |
+| 🍽️ Food | ₹X |
+| 🚌 Transport | ₹X |
+| 🎯 Activities | ₹X |
+| **Total** | **₹X** |
+
+---
+### ✈️ Travel Tips
+- **Best time:** [months]
+- **Getting there:** [options]
+- **Don't miss:** [one experience]
+
+---
+
+**Places:**
+## 🗺️ Top Places in [City]
+[Full places_tool output — paste every attraction with description]
+
+---
+
+General: Use ₹ for costs · Use --- dividers · Keep concise · Tailor to travel style"""
 
 class TripPlanner:
     def __init__(self):
-        # Initialize LangChain ChatGroq with tool-calling support
+        # Initialize LangChain ChatGroq (kept for fallback chain)
         self.llm = ChatGroq(
             groq_api_key=os.getenv("GROQ_API_KEY"),
-            model_name="llama-3.1-8b-instant",
-            temperature=0.4,
-            max_tokens=2048,
+            model_name="llama-3.3-70b-versatile",  # better tool-calling than 8b
+            temperature=0.3,
+            max_tokens=1024,
             timeout=30,
         )
 
         # Initialize memory
         self.memory = TravelMemory()
 
-        # Bind tools to LLM
+        # LangChain AgentExecutor — primary execution path (reliable, fast)
         self.llm_with_tools = self.llm.bind_tools(ALL_TOOLS)
-
-        # Prompt template for tool-calling agent
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", SYSTEM_PROMPT),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
-
-        # Use llm_with_tools so tool-calling is reliably triggered
         agent = create_tool_calling_agent(self.llm_with_tools, ALL_TOOLS, self.prompt)
-
-        # Agent executor with error handling
         self.agent_executor = AgentExecutor(
             agent=agent,
             tools=ALL_TOOLS,
             verbose=False,
             handle_parsing_errors=True,
-            max_iterations=5,
-            max_execution_time=60,
+            max_iterations=3,
+            max_execution_time=30,
             return_intermediate_steps=True,
         )
 
     def _resolve_input(self, user_input: str) -> str:
         """
-        If the user asks a follow-up weather/hotel question without naming a destination,
-        inject the known destination from memory so the agent always gets an explicit city.
+        Only inject context destination for vague follow-ups that contain
+        NO explicit city name. If the user names a city, pass through unchanged.
         """
         u = user_input.lower().strip()
         dest = self.memory.context.destination
@@ -185,44 +173,54 @@ class TripPlanner:
         if not dest:
             return user_input
 
-        # Weather follow-ups without an explicit city
+        # If the input already contains any known city name, don't override
+        known_cities = list(self.memory.context.__class__.__init__.__defaults__ or [])
+        from agent.memory import TravelContext
+        # Check against all known destinations in the static list
+        known_destinations = [
+            "goa", "jaipur", "manali", "delhi", "mumbai", "kerala",
+            "udaipur", "shimla", "bangalore", "chennai", "kolkata",
+            "agra", "varanasi", "rishikesh", "darjeeling", "ooty",
+            "ladakh", "kashmir", "rajasthan", "coorg", "munnar",
+            "leh", "kochi", "cochin", "pune", "hyderabad", "amritsar",
+            "jodhpur", "mysore", "mysuru", "hampi", "kodaikanal",
+        ]
+        # If user explicitly named a city, pass through unchanged
+        if any(city in u for city in known_destinations):
+            return user_input
+
+        # Only inject for truly vague follow-ups with no city mentioned
         weather_followups = [
             "what is the weather there", "what's the weather there",
             "how's the weather", "how is the weather", "weather there",
-            "weather in that place", "what about the weather",
-            "will it rain", "is it hot", "is it cold", "what is the climate",
-            "what's the weather", "what is the weather", "hows the weather",
-            "weather forecast", "check weather", "tell me the weather",
+            "will it rain", "is it hot", "is it cold",
+            "what's the weather", "what is the weather",
+            "weather forecast", "check weather",
         ]
-        if any(phrase in u for phrase in weather_followups) and dest.lower() not in u:
+        if any(phrase in u for phrase in weather_followups):
             return f"What is the weather in {dest}?"
 
-        # Hotel follow-ups without an explicit city
         hotel_followups = [
             "suggest hotels", "find hotels", "what about hotels",
             "where to stay", "hotels there", "accommodation there",
-            "suggest accommodation", "find hostels", "hotels within my budget",
-            "suggest hotels within my budget",
+            "suggest accommodation", "find hostels",
         ]
-        if any(phrase in u for phrase in hotel_followups) and dest.lower() not in u:
+        if any(phrase in u for phrase in hotel_followups):
             return f"Suggest hotels in {dest}"
 
-        # Places / attractions follow-ups without an explicit city
         places_followups = [
-            "what to see", "things to do", "top places", "tourist attractions",
-            "must visit", "places to visit", "what are the attractions",
-            "what should i see", "places there", "sightseeing",
+            "what to see there", "things to do there", "places there",
+            "what should i see", "sightseeing there", "attractions there",
         ]
-        if any(phrase in u for phrase in places_followups) and dest.lower() not in u:
+        if any(phrase in u for phrase in places_followups):
             return f"What are the top places to visit in {dest}?"
 
         return user_input
 
     def chat(self, user_input: str, session_id: str = "default") -> str:
-        # Rewrite vague follow-ups to include explicit destination
         resolved_input = self._resolve_input(user_input)
 
-        # Log search to DB (non-blocking — ignore failures)
+        # Log search to DB (non-blocking)
         try:
             save_search(
                 session_id=session_id,
@@ -233,7 +231,7 @@ class TripPlanner:
         except Exception:
             pass
 
-        # Inject saved user preferences into chat history
+        # Inject saved preferences
         prefs = {}
         try:
             prefs = get_preferences(session_id)
@@ -242,8 +240,6 @@ class TripPlanner:
 
         try:
             chat_history = self.memory.get_chat_history()
-
-            # Prepend preferences as a system message if available
             if prefs:
                 pref_str = format_preferences_for_prompt(prefs)
                 if pref_str:
@@ -256,49 +252,39 @@ class TripPlanner:
             })
 
             response = result.get("output", "")
-
-            # If agent output is empty or stopped, use raw tool output from intermediate steps
             if not response or "agent stopped" in response.lower():
                 steps = result.get("intermediate_steps", [])
                 if steps:
-                    tool_output = steps[-1][1] if steps else ""
-                    if tool_output:
-                        response = tool_output
-                    else:
-                        raise ValueError("Empty response")
-                else:
+                    response = steps[-1][1] if steps else ""
+                if not response:
                     raise ValueError("Empty response")
 
         except Exception:
-            # Fallback: use plain LLM chain without tools
+            # Fallback: plain LLM chain without tools
             try:
                 fallback_prompt = ChatPromptTemplate.from_messages([
                     ("system", SYSTEM_PROMPT),
                     MessagesPlaceholder(variable_name="chat_history"),
                     ("human", "{input}"),
                 ])
-                fallback_chain = fallback_prompt | self.llm | StrOutputParser()
-                response = fallback_chain.invoke({
+                chain = fallback_prompt | self.llm | StrOutputParser()
+                response = chain.invoke({
                     "input": resolved_input,
                     "chat_history": self.memory.get_chat_history(),
                 })
             except Exception as e:
                 return f"I apologize, I encountered an error: {str(e)}. Please try again."
 
-        # Update memory context from user message; store AI response
         self.memory.add_user_message(user_input)
         self.memory.messages.append(AIMessage(content=response))
 
-        # Persist any newly extracted preferences to DB
+        # Persist preferences
         try:
             ctx = self.memory.context
             updates = {}
-            if ctx.travel_style:
-                updates["travel_style"] = ctx.travel_style
-            if ctx.accommodation:
-                updates["accommodation"] = ctx.accommodation
-            if ctx.interests:
-                updates["interests"] = ctx.interests
+            if ctx.travel_style:  updates["travel_style"]  = ctx.travel_style
+            if ctx.accommodation: updates["accommodation"]  = ctx.accommodation
+            if ctx.interests:     updates["interests"]      = ctx.interests
             if updates:
                 save_preferences(session_id, **updates)
         except Exception:

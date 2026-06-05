@@ -144,12 +144,17 @@ def validate_input(text: str) -> tuple[bool, str]:
 
 
 # ── Response routing ──────────────────────────────────────────────────────────
-def _get_response(user_input: str) -> str:
+def _get_response(user_input: str) -> tuple[str, dict]:
+    """Returns (response_text, trace_dict)."""
+    import time
+    from agent.graph import run_graph
+    from langchain_core.messages import HumanMessage, AIMessage
+
+    start = time.perf_counter()
     doc_store = get_doc_store()
-    planner = get_planner()
     session_id = st.session_state.session_id
 
-    # RAG path for document questions
+    # RAG path
     if doc_store.has_documents():
         agent_keywords = [
             "weather", "hotel", "budget", "plan a trip", "calculate",
@@ -159,9 +164,32 @@ def _get_response(user_input: str) -> str:
             from rag.rag_chain import answer_from_docs
             rag_response = answer_from_docs(user_input, doc_store)
             if rag_response:
-                return "## 📄 From Your Documents\n\n" + rag_response
+                latency = round((time.perf_counter() - start) * 1000)
+                return (
+                    "## 📄 From Your Documents\n\n" + rag_response,
+                    {"path": "RAG", "latency_ms": latency, "docs": doc_store.document_names}
+                )
 
-    return planner.chat(user_input, session_id=session_id)
+    # Convert history to LangChain messages
+    chat_history = []
+    for m in st.session_state.messages:
+        role = m.get("role")
+        content = m.get("content", "")
+        if role == "user":
+            chat_history.append(HumanMessage(content=content))
+        elif role == "assistant":
+            chat_history.append(AIMessage(content=content))
+
+    # Run LangGraph workflow
+    response, graph_trace = run_graph(user_input, chat_history, session_id=session_id)
+    latency = round((time.perf_counter() - start) * 1000)
+
+    # Merge graph trace with metrics
+    trace = {
+        **graph_trace,
+        "latency_ms": latency,   # use end-to-end latency from Streamlit side
+    }
+    return response, trace
 
 
 # ── Export helpers ────────────────────────────────────────────────────────────
@@ -216,15 +244,27 @@ def _save_last_response():
 # ── Detect response type for card rendering ───────────────────────────────────
 def _detect_response_type(content: str) -> str:
     c = content.lower()
-    if "weather" in c and ("°c" in c or "humidity" in c):
+    # Check for specific section headers first (most reliable)
+    if "## 🌤️ weather" in c or "## 🌤 weather" in c:
         return "weather"
-    if "hotel" in c and ("•" in c or "₹" in c):
+    if "## 🏨 hotels" in c:
         return "hotel"
-    if "flight" in c and ("→" in c or "economy" in c):
+    if "## ✈️ flights" in c:
         return "flight"
-    if "budget" in c and "accommodation" in c and "₹" in c:
+    if "## 💰 budget breakdown" in c:
         return "budget"
-    if "day 1" in c or "itinerary" in c or "morning" in c:
+    if "## 🗺️" in c and ("day 1" in c or "day-by-day" in c or "trip to" in c):
+        return "itinerary"
+    if "## 🗺️ top places" in c:
+        return "places"
+    # Fallback: content-based detection
+    if "°c" in c and ("humidity" in c or "forecast" in c):
+        return "weather"
+    if "economy" in c and "→" in c and "₹" in c:
+        return "flight"
+    if "accommodation" in c and "food" in c and "transport" in c and "₹" in c:
+        return "budget"
+    if "day 1" in c and "morning" in c:
         return "itinerary"
     return "general"
 
@@ -379,9 +419,26 @@ with st.sidebar:
         )
 
     st.divider()
+    # ── Monitoring panel ──────────────────────────────────────────────────
+    st.markdown('<p class="sidebar-header">📊 Monitoring</p>', unsafe_allow_html=True)
+    try:
+        from agent.logger import metrics
+        summary = metrics.summary()
+        col_a, col_b = st.columns(2)
+        col_a.metric("Runs", summary["agent_runs"])
+        col_b.metric("Errors", summary["agent_errors"])
+        if summary["avg_agent_ms"]:
+            st.caption(f"Avg response: {summary['avg_agent_ms']}ms")
+        if summary["tool_calls"]:
+            top_tool = max(summary["tool_calls"], key=summary["tool_calls"].get)
+            st.caption(f"Most used: {top_tool} ({summary['tool_calls'][top_tool]}x)")
+    except Exception:
+        pass
+
+    st.divider()
     st.caption(
         f"Session `{st.session_state.session_id}` · "
-        "Powered by Groq · LangChain · Amadeus · Weatherstack"
+        "Powered by Groq · LangChain · LangGraph · Amadeus · Weatherstack"
     )
 
 
@@ -427,6 +484,10 @@ for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"], avatar="🧑" if msg["role"] == "user" else "🌍"):
         if msg["role"] == "assistant":
             _render_response_card(msg["content"])
+            # Trace expander — shows what the agent did
+            if msg.get("trace"):
+                with st.expander("🔍 How this was answered", expanded=False):
+                    st.json(msg["trace"])
             # Save button below each assistant message
             col_save, col_empty = st.columns([1, 4])
             with col_save:
@@ -478,8 +539,13 @@ if user_input:
         # Generate and show response
         with st.chat_message("assistant", avatar="🌍"):
             with st.spinner("🤔 Thinking…"):
-                response = _get_response(user_input)
+                response, trace = _get_response(user_input)
             _render_response_card(response)
+
+            # Query trace expander
+            with st.expander("🔍 How this was answered", expanded=False):
+                import json
+                st.code(json.dumps(trace, indent=2, default=str), language="json")
 
             # Save button for new response
             col_save, _ = st.columns([1, 4])
@@ -498,5 +564,5 @@ if user_input:
                     })
                     st.toast("✅ Saved to your trips!", icon="💾")
 
-        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state.messages.append({"role": "assistant", "content": response, "trace": trace})
         st.rerun()

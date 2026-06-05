@@ -119,12 +119,31 @@ def _amadeus_base(env: str) -> str:
     return "https://api.amadeus.com" if (env or "").lower() == "prod" else "https://test.api.amadeus.com"
 
 
+class _AmadeusTokenCache:
+    """Singleton that caches the Amadeus OAuth token and auto-refreshes before expiry."""
+    _token: Optional[str] = None
+    _expires_at: float = 0.0
+
+    @classmethod
+    def get_token(cls, api_key: str, api_secret: str, env: str) -> Optional[str]:
+        import time
+        if cls._token and time.time() < cls._expires_at - 60:
+            return cls._token
+        try:
+            url = f"{_amadeus_base(env)}/v1/security/oauth2/token"
+            data = {"grant_type": "client_credentials", "client_id": api_key, "client_secret": api_secret}
+            r = requests.post(url, data=data, timeout=8)
+            r.raise_for_status()
+            resp = r.json()
+            cls._token = resp.get("access_token")
+            cls._expires_at = time.time() + int(resp.get("expires_in", 1800))
+            return cls._token
+        except Exception:
+            return None
+
+
 def _get_amadeus_token(api_key: str, api_secret: str, env: str) -> Optional[str]:
-    url = f"{_amadeus_base(env)}/v1/security/oauth2/token"
-    data = {"grant_type": "client_credentials", "client_id": api_key, "client_secret": api_secret}
-    r = requests.post(url, data=data, timeout=15)
-    r.raise_for_status()
-    return r.json().get("access_token")
+    return _AmadeusTokenCache.get_token(api_key, api_secret, env)
 
 
 def _search_amadeus_flights(
