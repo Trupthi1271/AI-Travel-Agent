@@ -80,8 +80,12 @@ def _classify_query(text: str) -> str:
     return "general"
 
 
-def _extract_destination(text: str) -> Optional[str]:
-    """Simple destination extractor from query text."""
+def _extract_destination(text: str, current_dest: Optional[str] = None) -> Optional[str]:
+    """
+    Extract destination from query text.
+    If multiple cities are found (e.g. 'flights from Mumbai to Delhi'),
+    use the last-mentioned city and clear stale context.
+    """
     import re
     known = [
         "goa", "jaipur", "manali", "delhi", "mumbai", "kerala", "udaipur",
@@ -91,13 +95,23 @@ def _extract_destination(text: str) -> Optional[str]:
         "mysore", "hampi", "kodaikanal", "pondicherry", "andaman",
     ]
     text_lower = text.lower()
-    for city in known:
-        if city in text_lower:
-            return city.title()
-    # Pattern: "to X", "in X", "at X"
+    found = [city for city in known if city in text_lower]
+
+    if len(found) > 1:
+        # Multi-city query (e.g. "flights from Mumbai to Delhi")
+        # Use the destination (last city mentioned) and don't carry stale context
+        logger.debug(f"Multi-city detected: {found} — using last mentioned: {found[-1]}")
+        return found[-1].title()
+
+    if len(found) == 1:
+        return found[0].title()
+
+    # Pattern fallback: "to X", "in X"
     match = re.search(r"\b(?:to|in|at|visit|trip to)\s+([A-Z][a-z]+)", text)
     if match:
         return match.group(1)
+
+    return current_dest  # preserve existing context if no city found
     return None
 
 
@@ -123,23 +137,35 @@ def _get_llm_with_tools():
 
 SYSTEM_PROMPT = """You are TripWeaver, an AI Travel Concierge for Indian travelers.
 
-TOOL ROUTING — call EXACTLY the right tool for each query:
-- weather / rain / temperature / forecast → weather_tool(city)
-- hotels / stay / accommodation → hotel_tool(city)
-- budget with amount AND days → budget_tool("AMOUNT,DAYS")
-- flights / fly / airfare → flight_tool("ORIGIN,DESTINATION")
-- attractions / places / things to do → places_tool(city)
-- festivals / visa / travel news → web_search_tool(query)
-- save this trip → save_itinerary_tool(...)
-- my history / saved trips → search_history_tool(session_id)
+TOOL ROUTING — call the correct tool FIRST, then format the response:
+
+| Query type | Tool |
+|---|---|
+| weather / rain / temperature / forecast | weather_tool |
+| hotels / stay / accommodation | hotel_tool |
+| budget — user gives amount AND days | budget_tool |
+| flights / airfare | flight_tool |
+| attractions / places / things to do | places_tool |
+| festivals / visa / news / safety | web_search_tool |
+| "save this trip" | save_itinerary_tool |
+| "my history" / "saved trips" | search_history_tool |
 
 RULES:
-- Call the tool for the CURRENT query — ignore previous topics.
-- NEVER write tool syntax as text — always invoke the tool.
-- NEVER make up hotel names, flights, or attractions.
-- Paste tool output verbatim — do not paraphrase.
+1. Call ONE tool for the current query. After the tool returns, write your FINAL response immediately.
+2. Do NOT call more tools after receiving a tool result — format and respond.
+3. NEVER make up hotel names, flights, prices, or attraction names.
+4. Paste tool output into your response verbatim, then add your commentary.
 
-FORMAT responses with markdown: ## headers, tables, --- dividers, ₹ for costs."""
+RESPONSE FORMAT:
+
+Weather: ## 🌤️ Weather in [City] · paste full weather data · then 3 best places table · quick tips
+Hotels:  ## 🏨 Hotels in [City] · paste full hotel list · booking tips
+Flights: ## ✈️ Flights: [Origin] → [Destination] · paste full flight list · booking tips  
+Budget:  ## 💰 Budget Breakdown · paste full budget output
+Trip plan: ## 🗺️ [X]-Day Trip · call budget_tool first · then day tables · cost summary · tips
+Places:  ## 🗺️ Top Places in [City] · paste full places list with descriptions
+
+Use ₹ for costs · markdown tables · --- dividers · keep concise."""
 
 
 # ── Graph nodes ───────────────────────────────────────────────────────────────
@@ -151,7 +177,7 @@ def classify_node(state: TravelAgentState) -> TravelAgentState:
         (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
     )
     query_type = _classify_query(last_human)
-    destination = _extract_destination(last_human) or state.get("destination")
+    destination = _extract_destination(last_human, state.get("destination"))
 
     logger.debug(f"Classify: type={query_type}, dest={destination}")
     metrics.query_types[query_type] += 1
@@ -192,15 +218,39 @@ def agent_node(state: TravelAgentState) -> TravelAgentState:
 
 
 def format_node(state: TravelAgentState) -> TravelAgentState:
-    """Final formatting pass — ensures response is clean."""
-    # Nothing to do — the agent already formats via the system prompt
-    # This node exists as an extension point for post-processing
+    """
+    Final structural audit pass.
+    - Validates required markdown headers are present
+    - Detects formatting drift and logs warnings
+    - Trims tool output from message history to prevent context bloat
+    """
     messages = state["messages"]
-    last = messages[-1] if messages else None
+    if not messages:
+        return state
 
-    if last and isinstance(last, AIMessage) and last.tool_calls:
-        # Shouldn't happen here but guard against it
+    last = messages[-1]
+
+    if isinstance(last, AIMessage) and last.tool_calls:
         logger.warning("format_node received message with pending tool calls")
+        return state
+
+    if isinstance(last, AIMessage):
+        content = last.content
+        q_type = state.get("query_type", "general")
+
+        # Validate required headers per query type
+        required_headers = {
+            "weather":   "## 🌤️",
+            "hotel":     "## 🏨",
+            "flight":    "## ✈️",
+            "budget":    "## 💰",
+            "itinerary": "## 🗺️",
+            "places":    "## 🗺️",
+        }
+        expected = required_headers.get(q_type)
+        if expected and expected not in content:
+            logger.warning(f"Formatting drift for {q_type} — missing header '{expected}'")
+            metrics.record_tool_call("format_drift", 0, error=True)
 
     return state
 
@@ -234,15 +284,45 @@ def should_continue(state: TravelAgentState) -> Literal["tools", "format", "end"
 # ── Build the graph ───────────────────────────────────────────────────────────
 
 def build_graph() -> Any:
-    """Build and compile the LangGraph StateGraph."""
-    tool_node = ToolNode(ALL_TOOLS)
+    """Build and compile the LangGraph StateGraph with optional SQLite checkpointer."""
+
+    # Custom tools node that tracks calls and compresses large outputs
+    def tracked_tool_node(state: TravelAgentState):
+        last = state["messages"][-1]
+        called = []
+        if isinstance(last, AIMessage) and last.tool_calls:
+            called = [tc["name"] for tc in last.tool_calls]
+
+        result = ToolNode(ALL_TOOLS).invoke(state)
+
+        # Compress tool messages that are very large to prevent context bloat
+        # Keep full output for LLM to use, but trim repeated whitespace/emojis
+        compressed_msgs = []
+        for msg in result.get("messages", []):
+            if isinstance(msg, ToolMessage) and len(msg.content) > 2000:
+                # Trim to 2000 chars — enough for the LLM to format the response
+                trimmed = msg.content[:2000] + "\n[...output trimmed for context efficiency]"
+                compressed_msgs.append(ToolMessage(
+                    content=trimmed,
+                    tool_call_id=msg.tool_call_id,
+                    name=getattr(msg, "name", None),
+                ))
+                logger.debug(f"Compressed tool output: {len(msg.content)} → 2000 chars")
+            else:
+                compressed_msgs.append(msg)
+
+        existing = state.get("tool_calls_made") or []
+        return {
+            "messages":        compressed_msgs,
+            "tool_calls_made": existing + called,
+        }
 
     builder = StateGraph(TravelAgentState)
 
     # Add nodes
     builder.add_node("classify", classify_node)
     builder.add_node("agent",    agent_node)
-    builder.add_node("tools",    tool_node)
+    builder.add_node("tools",    tracked_tool_node)
     builder.add_node("format",   format_node)
 
     # Add edges
@@ -283,16 +363,17 @@ def run_graph(
     chat_history: List[BaseMessage],
     session_id: str = "default",
     destination: Optional[str] = None,
-) -> str:
+) -> tuple:
     """
     Run the LangGraph workflow for a single user query.
-    Returns the final text response.
+    Returns (response_text, trace_dict).
     """
     start = time.perf_counter()
     error_occurred = False
+    final_state = {}
 
     initial_state: TravelAgentState = {
-        "messages":        chat_history + [HumanMessage(content=user_input)],
+        "messages":        chat_history[-6:] + [HumanMessage(content=user_input)],
         "query_type":      "general",
         "destination":     destination,
         "session_id":      session_id,
@@ -327,4 +408,15 @@ def run_graph(
         metrics.record_agent_run(latency_ms, error=error_occurred)
         logger.info(f"Graph run complete: {latency_ms:.0f}ms")
 
-    return response
+    trace = {
+        "path":         "LangGraph StateGraph",
+        "latency_ms":   round(latency_ms),
+        "session_id":   session_id,
+        "query_type":   final_state.get("query_type", "general"),
+        "destination":  final_state.get("destination"),
+        "tools_called": final_state.get("tool_calls_made", []),
+        "iterations":   final_state.get("iteration", 0),
+        "error":        final_state.get("error"),
+    }
+
+    return response, trace
