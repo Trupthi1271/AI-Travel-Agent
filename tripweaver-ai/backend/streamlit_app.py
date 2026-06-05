@@ -147,9 +147,11 @@ def validate_input(text: str) -> tuple[bool, str]:
 def _get_response(user_input: str) -> tuple[str, dict]:
     """Returns (response_text, trace_dict)."""
     import time
+    from agent.graph import run_graph
+    from langchain_core.messages import HumanMessage, AIMessage
+
     start = time.perf_counter()
     doc_store = get_doc_store()
-    planner = get_planner()
     session_id = st.session_state.session_id
 
     # RAG path
@@ -168,18 +170,24 @@ def _get_response(user_input: str) -> tuple[str, dict]:
                     {"path": "RAG", "latency_ms": latency, "docs": doc_store.document_names}
                 )
 
-    response = planner.chat(user_input, session_id=session_id)
+    # Convert history to LangChain messages
+    chat_history = []
+    for m in st.session_state.messages:
+        role = m.get("role")
+        content = m.get("content", "")
+        if role == "user":
+            chat_history.append(HumanMessage(content=content))
+        elif role == "assistant":
+            chat_history.append(AIMessage(content=content))
+
+    # Run LangGraph workflow
+    response, graph_trace = run_graph(user_input, chat_history, session_id=session_id)
     latency = round((time.perf_counter() - start) * 1000)
 
-    from agent.logger import metrics
-    summary = metrics.summary()
+    # Merge graph trace with metrics
     trace = {
-        "path":         "LangChain AgentExecutor",
-        "latency_ms":   latency,
-        "session_id":   session_id,
-        "agent_runs":   summary["agent_runs"],
-        "tool_calls":   summary["tool_calls"],
-        "query_types":  summary["query_types"],
+        **graph_trace,
+        "latency_ms": latency,   # use end-to-end latency from Streamlit side
     }
     return response, trace
 
@@ -536,7 +544,8 @@ if user_input:
 
             # Query trace expander
             with st.expander("🔍 How this was answered", expanded=False):
-                st.json(trace)
+                import json
+                st.code(json.dumps(trace, indent=2, default=str), language="json")
 
             # Save button for new response
             col_save, _ = st.columns([1, 4])
