@@ -2,17 +2,14 @@
 langchain==0.3.25
 langchain-groq==0.3.2
 langchain-community==0.3.24
-langchain-core==0.3.58
+langchain-core==0.3.59
 langchain-text-splitters==0.3.8
 
 # UI
-chainlit==2.9.6
 streamlit==1.45.1
 
-# RAG — pure-Python TF-IDF retrieval (no PyTorch/TF required)
-# sentence-transformers removed: incompatible with Python 3.13 + TF 2.20 RC
-# faiss-cpu kept for future upgrade when embedding stack stabilises
-faiss-cpu==1.10.0
+# RAG — pure-Python TF-IDF retrieval (no ML deps)
+faiss-cpu>=1.12.0
 pypdf==5.4.0
 
 # Web search (free, no API key)
