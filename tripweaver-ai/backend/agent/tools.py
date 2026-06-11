@@ -21,6 +21,7 @@ from services.hotels import get_hotels
 from services.web_search import get_web_search
 from services.places import get_places
 from services.flights import get_flights
+from services.restaurants import get_restaurants
 from database.db import (
     save_search, save_itinerary, get_recent_searches,
     get_itineraries, get_popular_destinations,
@@ -304,6 +305,19 @@ def search_history_tool(session_id: str = "default") -> str:
         return f"❌ Could not retrieve history: {exc}"
 
 
+# ── 9. Restaurant Tool ────────────────────────────────────────────────────────
+
+@tool("restaurant_tool", args_schema=CityInput)
+def restaurant_tool(city: str) -> str:
+    """Find top restaurants, cafes, and food spots in an Indian city.
+
+    Use for: restaurants, where to eat, food, cafes, street food, dining questions.
+    Examples: 'best restaurants in Goa', 'where to eat in Jaipur', 'street food in Mumbai'.
+    Never make up restaurant names — always call this tool.
+    """
+    return safe_tool_call(get_restaurants, city, tool_name="RestaurantTool")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Registry
 # ══════════════════════════════════════════════════════════════════════════════
@@ -317,6 +331,7 @@ ALL_TOOLS = [
     flight_tool,
     save_itinerary_tool,
     search_history_tool,
+    restaurant_tool,
 ]
 
 TOOL_METADATA = {
@@ -328,4 +343,5 @@ TOOL_METADATA = {
     "flight_tool":         {"icon": "✈️", "label": "Flight Search",        "api": "Amadeus / static"},
     "save_itinerary_tool": {"icon": "💾", "label": "Save Itinerary",       "api": "SQLite (local)"},
     "search_history_tool": {"icon": "📋", "label": "Search History",       "api": "SQLite (local)"},
+    "restaurant_tool":     {"icon": "🍽️", "label": "Restaurants",          "api": "OpenTripMap / curated"},
 }

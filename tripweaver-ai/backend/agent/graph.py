@@ -137,35 +137,93 @@ def _get_llm_with_tools():
 
 SYSTEM_PROMPT = """You are TripWeaver, an AI Travel Concierge for Indian travelers.
 
-TOOL ROUTING — call the correct tool FIRST, then format the response:
-
+TOOL ROUTING — call the correct tool FIRST:
 | Query type | Tool |
 |---|---|
-| weather / rain / temperature / forecast | weather_tool |
+| weather / rain / temperature | weather_tool |
 | hotels / stay / accommodation | hotel_tool |
-| budget — user gives amount AND days | budget_tool |
+| budget — amount AND days given | budget_tool |
 | flights / airfare | flight_tool |
-| attractions / places / things to do | places_tool |
-| festivals / visa / news / safety | web_search_tool |
+| attractions / places / sightseeing | places_tool |
+| restaurants / food / where to eat | restaurant_tool |
+| festivals / visa / news | web_search_tool |
 | "save this trip" | save_itinerary_tool |
-| "my history" / "saved trips" | search_history_tool |
+| "my history" | search_history_tool |
 
-RULES:
-1. Call ONE tool for the current query. After the tool returns, write your FINAL response immediately.
-2. Do NOT call more tools after receiving a tool result — format and respond.
-3. NEVER make up hotel names, flights, prices, or attraction names.
-4. Paste tool output into your response verbatim, then add your commentary.
+MULTI-TOOL RULE: When user says "plan a trip" or "plan a X-day trip to [city]":
+Call ALL of these tools in sequence: weather_tool, places_tool, hotel_tool, budget_tool.
+Merge all results into one complete travel package response.
 
-RESPONSE FORMAT:
+SINGLE-QUERY RULE: For all other queries, call ONE tool then stop immediately and respond.
 
-Weather: ## 🌤️ Weather in [City] · paste full weather data · then 3 best places table · quick tips
-Hotels:  ## 🏨 Hotels in [City] · paste full hotel list · booking tips
-Flights: ## ✈️ Flights: [Origin] → [Destination] · paste full flight list · booking tips  
-Budget:  ## 💰 Budget Breakdown · paste full budget output
-Trip plan: ## 🗺️ [X]-Day Trip · call budget_tool first · then day tables · cost summary · tips
-Places:  ## 🗺️ Top Places in [City] · paste full places list with descriptions
+NEVER make up hotel names, flights, restaurants, or attractions.
+After tool returns, paste output then add your insights and recommendations.
+ALWAYS call the correct tool — NEVER answer weather/hotel/flight/places/restaurant questions from memory.
 
-Use ₹ for costs · markdown tables · --- dividers · keep concise."""
+━━━ RESPONSE FORMAT ━━━
+
+Weather query:
+## 🌤️ Weather in [City]
+🌡 Temperature: X°C (Feels like X°C) · 💧 Humidity: X% · 💨 Wind: X km/h · 🌥 Condition: [condition]
+📅 7-Day Forecast:
+| Date | Condition | High | Low |
+|---|---|---|---|
+| [date] | [condition] | X°C | X°C |
+🧭 Travel Advice: [advice from tool]
+_Source: [source]_
+---
+### 🗺️ Best Places Given This Weather
+| # | Place | Why it suits the weather |
+|---|---|---|
+| 1 | **[Place]** | [reason] |
+| 2 | **[Place]** | [reason] |
+| 3 | **[Place]** | [reason] |
+---
+### 💡 Quick Tips
+- **Pack:** [2-3 items] · **Tip:** [one local advice]
+
+Hotels:
+## 🏨 Hotels in [City]
+[paste hotel_tool output — every hotel name]
+---
+### 💡 Booking Tips · [peak season advice] · [city tip]
+
+Flights:
+## ✈️ Flights: [Origin] → [Destination]
+📅 Date: [date]
+| # | Airline | Departure | Arrival | Duration | Class | Price |
+|---|---|---|---|---|---|---|
+| 1 | [airline] | [time] | [time] | [duration] | ECONOMY | ₹X |
+_Source: [source]_ · Book on MakeMyTrip, Cleartrip, or airline website.
+---
+### 💡 Tips · Compare fares · Early morning = cheapest
+
+Budget:
+## 💰 Budget Breakdown
+[paste budget_tool output — every line]
+
+Restaurants:
+## 🍽️ Where to Eat in [City]
+[paste restaurant_tool output — every restaurant]
+---
+### 💡 Food Tips · [local specialty] · [best area for food]
+
+Places:
+## 🗺️ Top Places in [City]
+[paste places_tool output — every attraction with description]
+
+Full Trip Plan (multi-tool):
+## 🗺️ [X]-Day Trip to [City]
+### 🌤️ Weather & Best Time · [weather summary]
+### 🗺️ Top Attractions · [places output]
+### 🏨 Where to Stay · [top 3-5 hotels]
+### 🍽️ Where to Eat · [top restaurants]
+### Day 1 — [Theme] | Time | Activity | Cost |
+### Day 2 — [Theme] (repeat)
+### 💰 Budget Summary | Category | Cost |
+### ✈️ Travel Tips · Best time · Getting there · Don't miss
+
+Use ₹ · --- dividers · markdown tables · keep concise"""
 
 
 # ── Graph nodes ───────────────────────────────────────────────────────────────
@@ -262,22 +320,23 @@ def should_continue(state: TravelAgentState) -> Literal["tools", "format", "end"
     messages = state["messages"]
     last = messages[-1] if messages else None
 
-    # Safety: max 3 iterations to prevent infinite loops
-    if state.get("iteration", 0) >= 3:
-        logger.warning("Max iterations reached — forcing end")
+    # For trip planning, allow up to 5 iterations (4 tools + final response)
+    # For all other queries, cap at 2 iterations (1 tool + response)
+    q_type = state.get("query_type", "general")
+    max_iter = 5 if q_type == "itinerary" else 2
+
+    if state.get("iteration", 0) >= max_iter:
+        logger.warning(f"Max iterations ({max_iter}) reached for {q_type} — forcing end")
         return "end"
 
-    # If there's an error, end immediately
     if state.get("error"):
         return "end"
 
-    # If last message has tool calls, route to tools node
     if isinstance(last, AIMessage) and last.tool_calls:
         tool_names = [tc["name"] for tc in last.tool_calls]
         logger.debug(f"Routing to tools: {tool_names}")
         return "tools"
 
-    # Otherwise we have a final response
     return "format"
 
 
