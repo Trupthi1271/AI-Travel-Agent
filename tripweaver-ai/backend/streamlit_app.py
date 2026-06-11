@@ -171,14 +171,17 @@ def _get_response(user_input: str) -> tuple[str, dict]:
                 )
 
     # Convert history to LangChain messages
+    # Trim AI responses to 200 chars to avoid context contamination
     chat_history = []
-    for m in st.session_state.messages:
+    for m in st.session_state.messages[-8:]:  # last 8 messages max
         role = m.get("role")
         content = m.get("content", "")
         if role == "user":
             chat_history.append(HumanMessage(content=content))
         elif role == "assistant":
-            chat_history.append(AIMessage(content=content))
+            # Keep only a slim summary of previous AI responses
+            trimmed = content[:200] + "..." if len(content) > 200 else content
+            chat_history.append(AIMessage(content=trimmed))
 
     # Run LangGraph workflow
     response, graph_trace = run_graph(user_input, chat_history, session_id=session_id)

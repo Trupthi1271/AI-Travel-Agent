@@ -334,31 +334,31 @@ class TestCICD:
 
 class TestGraphIntegration:
 
-    @patch("agent.graph._llm_with_tools")
-    def test_run_graph_returns_string(self, mock_llm_with_tools):
-        """Graph should return a string response without hitting real APIs."""
+    @patch("agent.graph._get_llm_with_tools")
+    def test_run_graph_returns_string(self, mock_get_llm):
+        """Graph should return a (string, dict) tuple."""
         from langchain_core.messages import AIMessage
-        mock_llm_with_tools.invoke.return_value = AIMessage(
-            content="The weather in Goa is sunny and 30°C."
-        )
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = AIMessage(content="The weather in Goa is sunny and 30°C.")
+        mock_get_llm.return_value = mock_llm
 
         from agent.graph import run_graph
-        result = run_graph(
-            user_input="What's the weather in Goa?",
-            chat_history=[],
-            session_id="test",
-        )
-        assert isinstance(result, str)
-        assert len(result) > 0
+        result = run_graph(user_input="What's the weather in Goa?", chat_history=[], session_id="test")
+        assert isinstance(result, tuple)
+        response, trace = result
+        assert isinstance(response, str)
+        assert len(response) > 0
+        assert trace["path"] == "LangGraph StateGraph"
 
-    @patch("agent.graph._llm_with_tools")
-    def test_run_graph_handles_llm_error(self, mock_llm_with_tools):
-        """Graph should return error message string, not raise."""
-        mock_llm_with_tools.invoke.side_effect = Exception("LLM unavailable")
+    @patch("agent.graph._get_llm_with_tools")
+    def test_run_graph_handles_llm_error(self, mock_get_llm):
+        """Graph should return error string, not raise."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = Exception("LLM unavailable")
+        mock_get_llm.return_value = mock_llm
 
         from agent.graph import run_graph
-        result = run_graph(
-            user_input="What's the weather in Goa?",
-            chat_history=[],
-        )
-        assert isinstance(result, str)
+        result = run_graph(user_input="What's the weather in Goa?", chat_history=[])
+        assert isinstance(result, tuple)
+        response, trace = result
+        assert isinstance(response, str)
