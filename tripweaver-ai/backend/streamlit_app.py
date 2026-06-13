@@ -16,6 +16,7 @@ import json
 import uuid
 import warnings
 import tempfile
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -88,6 +89,22 @@ st.markdown("""
     padding: 2px 8px;
     font-size: 0.75rem;
     margin: 2px;
+}
+/* Make Markdown tables easier to scan */
+.stMarkdown table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0 1rem 0;
+}
+.stMarkdown th,
+.stMarkdown td {
+    border: 1px solid rgba(128, 128, 128, 0.35);
+    padding: 0.45rem 0.65rem;
+    vertical-align: top;
+}
+.stMarkdown th {
+    background: rgba(128, 128, 128, 0.12);
+    font-weight: 700;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -170,18 +187,11 @@ def _get_response(user_input: str) -> tuple[str, dict]:
                     {"path": "RAG", "latency_ms": latency, "docs": doc_store.document_names}
                 )
 
-    # Convert history to LangChain messages
-    # Trim AI responses to 200 chars to avoid context contamination
+    # Only pass user messages as history — AI responses cause context contamination
     chat_history = []
-    for m in st.session_state.messages[-8:]:  # last 8 messages max
-        role = m.get("role")
-        content = m.get("content", "")
-        if role == "user":
-            chat_history.append(HumanMessage(content=content))
-        elif role == "assistant":
-            # Keep only a slim summary of previous AI responses
-            trimmed = content[:200] + "..." if len(content) > 200 else content
-            chat_history.append(AIMessage(content=trimmed))
+    for m in st.session_state.messages[-6:]:
+        if m.get("role") == "user":
+            chat_history.append(HumanMessage(content=m.get("content", "")))
 
     # Run LangGraph workflow
     response, graph_trace = run_graph(user_input, chat_history, session_id=session_id)
@@ -245,42 +255,112 @@ def _save_last_response():
 
 
 # ── Detect response type for card rendering ───────────────────────────────────
+def _looks_like_table_row(line: str) -> bool:
+    """Detect simple tab-separated table rows from tools or model output."""
+    if "\t" not in line:
+        return False
+    cells = [cell.strip() for cell in line.split("\t")]
+    return len(cells) >= 2 and all(cells)
+
+
+def _tabs_to_markdown_tables(content: str) -> str:
+    """Convert consecutive tab-separated rows into pipe Markdown tables."""
+    lines = content.splitlines()
+    converted: list[str] = []
+    i = 0
+
+    while i < len(lines):
+        if not _looks_like_table_row(lines[i]):
+            converted.append(lines[i])
+            i += 1
+            continue
+
+        rows: list[list[str]] = []
+        while i < len(lines) and _looks_like_table_row(lines[i]):
+            rows.append([cell.strip() for cell in lines[i].split("\t")])
+            i += 1
+
+        width = max(len(row) for row in rows)
+        rows = [row + [""] * (width - len(row)) for row in rows]
+        converted.append("")
+        converted.append("| " + " | ".join(rows[0]) + " |")
+        converted.append("| " + " | ".join(["---"] * width) + " |")
+        for row in rows[1:]:
+            converted.append("| " + " | ".join(row) + " |")
+        converted.append("")
+
+    return "\n".join(converted)
+
+
+def _strip_duplicate_heading(content: str, response_type: str) -> str:
+    """Remove a first-line title when the UI card already provides it."""
+    duplicate_titles = {
+        "weather": {"weather report"},
+        "hotel": {"accommodation options"},
+        "flight": {"flight results"},
+        "budget": {"budget breakdown"},
+        "itinerary": {"trip itinerary"},
+        "places": {"top places"},
+        "restaurant": {"restaurants"},
+    }
+    lines = content.splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if not lines:
+        return content
+
+    first = re.sub(r"^[#\s\W_]+", "", lines[0]).strip().lower()
+    if first in duplicate_titles.get(response_type, set()):
+        return "\n".join(lines[1:]).lstrip()
+    return "\n".join(lines)
+
+
+def _prepare_response_markdown(content: str, response_type: str) -> str:
+    """Normalize assistant content before Streamlit renders it."""
+    content = content.replace(" Rs ", " ₹").replace("Rs ", "₹").replace("Rs.", "₹")
+    content = _tabs_to_markdown_tables(content)
+    content = _strip_duplicate_heading(content, response_type)
+    return content
+
+
 def _detect_response_type(content: str) -> str:
     c = content.lower()
-    # Check for specific section headers first (most reliable)
+    # Itinerary FIRST — must check before weather since itineraries contain temperature data
+    if "day 1" in c and ("day 2" in c or "trip to" in c):
+        return "itinerary"
+    if "## 🗺️" in c and ("day 1" in c or "trip to" in c):
+        return "itinerary"
+    # Then specific headers
     if "## 🌤️ weather" in c or "## 🌤 weather" in c:
         return "weather"
-    if "## 🏨 hotels" in c:
+    if "## 🏨" in c:
         return "hotel"
-    if "## ✈️ flights" in c:
+    if "## ✈️" in c:
         return "flight"
-    if "## 💰 budget breakdown" in c:
+    if "## 💰" in c:
         return "budget"
-    if "## 🗺️" in c and ("day 1" in c or "day-by-day" in c or "trip to" in c):
-        return "itinerary"
     if "## 🗺️ top places" in c:
         return "places"
-    # Fallback: content-based detection
-    if "°c" in c and ("humidity" in c or "forecast" in c):
+    if "## 🍽️" in c:
+        return "restaurant"
+    # Fallback content-based
+    if "°c" in c and ("humidity" in c or "forecast" in c) and "day 1" not in c:
         return "weather"
-    if "economy" in c and "→" in c and "₹" in c:
-        return "flight"
-    if "accommodation" in c and "food" in c and "transport" in c and "₹" in c:
-        return "budget"
-    if "day 1" in c and "morning" in c:
-        return "itinerary"
     return "general"
 
 
 def _render_response_card(content: str):
     """Render assistant response with a styled card header based on type."""
     rtype = _detect_response_type(content)
+    content = _prepare_response_markdown(content, rtype)
     icons = {
         "weather":   ("🌤️", "#4A90D9", "Weather Report"),
         "hotel":     ("🏨", "#27AE60", "Accommodation Options"),
         "flight":    ("✈️", "#8E44AD", "Flight Results"),
         "budget":    ("💰", "#E67E22", "Budget Breakdown"),
         "itinerary": ("🗺️", "#FF6B35", "Trip Itinerary"),
+        "places":    ("🗺️", "#16A085", "Top Places"),
+        "restaurant": ("🍽️", "#C0392B", "Restaurants"),
         "general":   ("💬", "#555", ""),
     }
     icon, color, label = icons.get(rtype, icons["general"])

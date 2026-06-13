@@ -103,11 +103,12 @@ async def chat(request: ChatRequest):
 
     # Convert history to LangChain messages (trim AI content to avoid context bloat)
     chat_history = []
-    for m in (request.history or [])[-8:]:
+    for m in (request.history or [])[-6:]:  # last 6 only
         if m.role == "user":
             chat_history.append(HumanMessage(content=m.content))
         elif m.role == "assistant":
-            trimmed = m.content[:200] + "..." if len(m.content) > 200 else m.content
+            # Keep only first 150 chars of AI responses — enough for context, not enough to contaminate
+            trimmed = m.content[:150] + "..." if len(m.content) > 150 else m.content
             chat_history.append(AIMessage(content=trimmed))
 
     try:
