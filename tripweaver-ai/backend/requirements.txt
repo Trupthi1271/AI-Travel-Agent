@@ -6,6 +6,7 @@ langchain-core==0.3.86
 langchain-text-splitters==0.3.8
 langchain-google-genai==2.1.12
 langgraph==0.4.5
+langgraph-prebuilt==0.1.8
 
 # UI
 streamlit==1.45.1
