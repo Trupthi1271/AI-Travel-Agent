@@ -1,0 +1,70 @@
+name: CI — TripWeaver AI
+
+on:
+  push:
+    branches: [main, agent-enhancements]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: tripweaver-ai/backend
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        working-directory: tripweaver-ai/backend
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python -m pytest tests/ -v --tb=short
+
+      - name: Check syntax — all Python files
+        working-directory: tripweaver-ai/backend
+        run: |
+          python -m py_compile agent/planner.py
+          python -m py_compile agent/tools.py
+          python -m py_compile agent/graph.py
+          python -m py_compile agent/logger.py
+          python -m py_compile services/weather.py
+          python -m py_compile services/hotels.py
+          python -m py_compile services/flights.py
+          python -m py_compile services/places.py
+          python -m py_compile services/web_search.py
+          python -m py_compile database/db.py
+          python -m py_compile rag/document_store.py
+          python -m py_compile rag/rag_chain.py
+          python -m py_compile streamlit_app.py
+          echo "All syntax checks passed"
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff==0.4.4
+
+      - name: Run ruff linter
+        working-directory: tripweaver-ai/backend
+        run: ruff check . --ignore E501,E402 || true
+        # || true — lint warnings don't fail the build during development
