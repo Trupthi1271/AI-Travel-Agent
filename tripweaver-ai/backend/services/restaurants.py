@@ -83,6 +83,59 @@ _STATIC_RESTAURANTS: Dict[str, List[Dict]] = {
         {"name": "Keshari Restaurant",     "cuisine": "vegetarian", "description": "Best thali in Varanasi — pure vegetarian Banarasi food."},
         {"name": "Blue Lassi Shop",        "cuisine": "street",     "description": "Iconic 70-year-old shop serving the finest lassi in India."},
     ],
+    "hyderabad": [
+        {"name": "Paradise Biryani",       "cuisine": "indian",     "description": "Most iconic biryani restaurant in Hyderabad since 1953 — a must visit."},
+        {"name": "Shah Ghouse Cafe",       "cuisine": "indian",     "description": "Famous for authentic Hyderabadi biryani and haleem near Old City."},
+        {"name": "Cafe Bahar",             "cuisine": "indian",     "description": "Legendary cafe for biryani and Irani chai since 1972."},
+        {"name": "Hotel Shadab",           "cuisine": "indian",     "description": "Old City favourite for mutton biryani and authentic Hyderabadi cuisine."},
+        {"name": "Chutneys",               "cuisine": "vegetarian", "description": "Popular South Indian vegetarian restaurant with great dosas and idlis."},
+        {"name": "Ohri's Jiva Imperia",    "cuisine": "other",      "description": "Premium multi-cuisine dining with views of Hussain Sagar Lake."},
+    ],
+    "bangalore": [
+        {"name": "MTR (Mavalli Tiffin Room)", "cuisine": "vegetarian", "description": "Legendary South Indian breakfast since 1924 — queue from 7am."},
+        {"name": "Koshy's",                "cuisine": "other",      "description": "Historic cafe on St Mark's Road, Bangalore institution since 1940."},
+        {"name": "Toit Brewpub",           "cuisine": "bar",        "description": "Award-winning craft brewery with excellent food and live music."},
+        {"name": "Vidyarthi Bhavan",       "cuisine": "vegetarian", "description": "Famous for crispy masala dosa — a Gandhi Bazaar institution since 1943."},
+        {"name": "The Black Rabbit",       "cuisine": "other",      "description": "Trendy gastropub in Indiranagar with great burgers and cocktails."},
+    ],
+    "chennai": [
+        {"name": "Murugan Idli Shop",      "cuisine": "vegetarian", "description": "Chennai institution — softest idlis and best chutneys in the city."},
+        {"name": "Ratna Cafe",             "cuisine": "vegetarian", "description": "Legendary filter coffee and South Indian breakfast since 1948."},
+        {"name": "Ponnusamy Hotel",        "cuisine": "indian",     "description": "Famous for Chettinad cuisine — spicy and authentic Tamil food."},
+        {"name": "Buhari",                 "cuisine": "indian",     "description": "Historic restaurant on Anna Salai known for mutton and chicken dishes."},
+        {"name": "The Marina Beach Stalls","cuisine": "street",     "description": "Evening street food scene along the world's longest urban beach."},
+    ],
+    "kolkata": [
+        {"name": "Peter Cat",              "cuisine": "other",      "description": "Iconic Park Street restaurant famous for chelo kebabs since 1975."},
+        {"name": "Kewpie's Kitchen",       "cuisine": "indian",     "description": "Authentic Bengali home cooking — best kosha mangsho in the city."},
+        {"name": "Mocambo",                "cuisine": "other",      "description": "Classic Continental restaurant on Park Street, Kolkata landmark."},
+        {"name": "Anadi Cabin",            "cuisine": "street",     "description": "Famous for egg rolls and kathi rolls — Kolkata street food staple."},
+        {"name": "Indian Coffee House",    "cuisine": "cafe",       "description": "Historic cafe on College Street, adda culture and filter coffee."},
+    ],
+    "agra": [
+        {"name": "Pind Balluchi",          "cuisine": "indian",     "description": "Best Mughlai food near the Taj Mahal — great dal and kebabs."},
+        {"name": "Sheroes Hangout",        "cuisine": "cafe",       "description": "Unique cafe run by acid attack survivors, good food and great cause."},
+        {"name": "Brijwasi",               "cuisine": "street",     "description": "Famous for petha (Agra's signature sweet) and Indian sweets."},
+        {"name": "Dasaprakash",            "cuisine": "vegetarian", "description": "South Indian vegetarian restaurant popular with tourists."},
+    ],
+    "udaipur": [
+        {"name": "Ambrai Restaurant",      "cuisine": "indian",     "description": "Stunning lakeside dining with views of City Palace and Lake Pichola."},
+        {"name": "Natraj Dining Hall",     "cuisine": "indian",     "description": "Best local Rajasthani thali in Udaipur, very affordable."},
+        {"name": "Upre by 1559 AD",        "cuisine": "other",      "description": "Rooftop restaurant on Lake Pichola with live traditional music."},
+        {"name": "Jheel's Ginger Coffee Bar", "cuisine": "cafe",   "description": "Popular backpacker cafe near Jagdish Temple."},
+    ],
+    "pune": [
+        {"name": "Shabree",                "cuisine": "indian",     "description": "Famous for authentic Maharashtrian thali and misal pav."},
+        {"name": "Arthur's Theme",         "cuisine": "other",      "description": "Quirky themed restaurant in Camp area, popular for its ambiance."},
+        {"name": "Cafe Goodluck",          "cuisine": "cafe",       "description": "Pune landmark for bun maska, chai, and Irani cafe culture since 1935."},
+        {"name": "Vaishali Restaurant",    "cuisine": "vegetarian", "description": "Iconic South Indian vegetarian restaurant on FC Road since 1970."},
+    ],
+    "amritsar": [
+        {"name": "Langar at Golden Temple","cuisine": "vegetarian", "description": "Free community kitchen serving 100,000 people daily — a spiritual experience."},
+        {"name": "Kesar Da Dhaba",         "cuisine": "indian",     "description": "Legendary dhaba since 1916 — best dal makhani and lassi in Amritsar."},
+        {"name": "Brothers' Dhaba",        "cuisine": "indian",     "description": "Famous for Amritsari kulcha and chole near the Golden Temple."},
+        {"name": "Bharawan Da Dhaba",      "cuisine": "indian",     "description": "Classic Punjabi food near Town Hall — try the paneer dishes."},
+    ],
 }
 
 
@@ -161,22 +214,39 @@ def get_restaurants(city: str) -> str:
             f"Try searching on Zomato or Google Maps for live recommendations."
         )
 
-    # Group by cuisine
-    grouped: Dict[str, List[str]] = {}
+    # Use ordered category display
+    category_order = [
+        ("indian",     "🍛 Indian"),
+        ("seafood",    "🦞 Seafood"),
+        ("street",     "🌮 Street Food"),
+        ("vegetarian", "🥗 Vegetarian"),
+        ("cafe",       "☕ Cafes"),
+        ("bar",        "🍺 Bars & Pubs"),
+        ("other",      "🍽️ Restaurants"),
+        ("chinese",    "🥢 Chinese"),
+        ("fast_food",  "🍔 Fast Food"),
+    ]
+
+    grouped: Dict[str, List[dict]] = {}
     for r in restaurants:
         cuisine = r.get("cuisine", "other")
-        label = CUISINE_LABELS.get(cuisine, "🍽️ Restaurants")
-        entry = f"• **{r['name']}**"
-        if r.get("description"):
-            entry += f" — {r['description']}"
-        grouped.setdefault(label, []).append(entry)
+        grouped.setdefault(cuisine, []).append(r)
 
     lines = [f"## 🍽️ Where to Eat in {city.title()}\n"]
-    for label, items in grouped.items():
-        lines.append(f"### {label}")
-        lines.extend(items)
+    for cat_key, cat_label in category_order:
+        if cat_key not in grouped:
+            continue
+        items = grouped[cat_key]
+        if not items:
+            continue
+        lines.append(f"### {cat_label}")
+        lines.append("| Restaurant | About |")
+        lines.append("|---|---|")
+        for r in items:
+            desc = r.get("description", "—")
+            lines.append(f"| **{r['name']}** | {desc} |")
         lines.append("")
 
     lines.append(f"_Source: {source}_")
-    lines.append("\n💡 **Tip:** Always check current ratings on Zomato or Google Maps before visiting.")
+    lines.append("💡 Check Zomato or Google Maps for current ratings and timings.")
     return "\n".join(lines).strip()

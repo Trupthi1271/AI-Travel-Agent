@@ -79,6 +79,66 @@ def _format_forecast(dates: List[str], codes: List[int], max_temps: List[float],
     return "\n".join(lines)
 
 
+def _best_places_for_weather(city: str, condition: str) -> str:
+    """Return 3 destination-specific places that suit the current weather."""
+    city_key = city.lower().strip()
+    rainy = any(word in condition.lower() for word in ["rain", "drizzle", "shower", "thunder", "mist"])
+
+    places = {
+        "goa": [
+            ("Fort Aguada", "Historic fort with sea views; easier than beach time if rain starts."),
+            ("Reis Magos Fort", "Covered heritage stop with scenic views over the Mandovi River."),
+            ("Anjuna Market", "Good for shopping, cafes, and short outdoor walks between showers."),
+        ] if rainy else [
+            ("Palolem Beach", "Calmer beach for swimming, sunset walks, and relaxed cafes."),
+            ("Baga Beach", "Best for water sports, beach shacks, and lively evening scenes."),
+            ("Fort Aguada", "Open coastal views and an easy sightseeing stop in clear weather."),
+        ],
+        "manali": [
+            ("Hadimba Temple", "Forest setting and short walks work well in cool mountain weather."),
+            ("Old Manali", "Cafes, shops, and riverside lanes are easy to explore between showers."),
+            ("Museum of Himachal Culture", "Indoor-friendly stop if rain or mist reduces visibility."),
+        ],
+        "jaipur": [
+            ("City Palace", "A mix of indoor galleries and courtyards works well in hot or rainy weather."),
+            ("Albert Hall Museum", "Indoor museum stop, useful during heat, rain, or harsh afternoon sun."),
+            ("Hawa Mahal", "Quick iconic stop with nearby bazaars and easy photo opportunities."),
+        ],
+    }
+    selected = places.get(city_key, [
+        ("Main heritage area", "Good first stop for sightseeing based on current conditions."),
+        ("Local market", "Flexible option for food, shopping, and short walks."),
+        ("Museum or cultural center", "Useful indoor backup if weather changes."),
+    ])
+
+    lines = [
+        "### Best Places Given This Weather",
+        "",
+        "| Place | Reason |",
+        "|---|---|",
+    ]
+    for place, reason in selected[:3]:
+        lines.append(f"| {place} | {reason} |")
+    return "\n".join(lines)
+
+
+def _pack_list(condition: str, temp: Optional[float]) -> str:
+    """Return a compact pack list for the current weather."""
+    condition_lower = condition.lower()
+    if any(word in condition_lower for word in ["rain", "drizzle", "shower", "thunder", "mist"]):
+        items = ["Umbrella or rain jacket", "Waterproof footwear", "Quick-dry clothing"]
+    elif temp is not None and temp >= 35:
+        items = ["Cap or hat", "Sunscreen", "Reusable water bottle"]
+    elif temp is not None and temp <= 10:
+        items = ["Warm jacket", "Thermal layer", "Comfortable closed shoes"]
+    else:
+        items = ["Light clothing", "Water bottle", "Sunscreen"]
+
+    lines = ["### Pack", ""]
+    lines.extend(f"- {item}" for item in items)
+    return "\n".join(lines)
+
+
 def get_weather(city: str) -> str:
     """
     Fetch real-time weather + 7-day forecast for a city.
@@ -87,12 +147,10 @@ def get_weather(city: str) -> str:
     weatherstack_key = os.getenv("WEATHERSTACK_API_KEY") or os.getenv("WEATHER_API_KEY")
     weather_provider = os.getenv("WEATHER_PROVIDER", "").lower()
 
-    # --- Weatherstack (paid, more accurate) ---
+    # --- Weatherstack (current conditions) + Open-Meteo (3-day forecast) ---
     if weather_provider == "weatherstack" or weatherstack_key:
         try:
             url = "http://api.weatherstack.com/current"
-            # Append ", India" to avoid Weatherstack mismatching Indian cities
-            # e.g. "Goa" → "Genoa, Italy" without this fix
             query = f"{city}, India" if "india" not in city.lower() else city
             params = {"access_key": weatherstack_key, "query": query}
             r = requests.get(url, params=params, timeout=8)
@@ -100,9 +158,9 @@ def get_weather(city: str) -> str:
             data = r.json()
             if data.get("error"):
                 return f"❌ Weather error for {city.title()}: {data['error'].get('info', 'Unknown error')}"
-            loc = data.get("location", {})
+            loc_data = data.get("location", {})
             cur = data.get("current", {})
-            name = loc.get("name") or city
+            name = loc_data.get("name") or city
             temp = cur.get("temperature")
             humidity = cur.get("humidity")
             feels_like = cur.get("feelslike")
@@ -110,14 +168,51 @@ def get_weather(city: str) -> str:
             descs = cur.get("weather_descriptions") or []
             condition = descs[0] if descs else "Unknown"
             advice = _travel_advice(condition, temp)
+
+            # Get 3-day forecast from Open-Meteo (free, always available)
+            forecast_table = ""
+            try:
+                geo = _geocode_city(city)
+                if geo:
+                    fm_url = "https://api.open-meteo.com/v1/forecast"
+                    fm_params = {
+                        "latitude": geo["lat"], "longitude": geo["lon"],
+                        "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+                        "timezone": "auto", "forecast_days": 3,
+                    }
+                    fm_r = requests.get(fm_url, params=fm_params, timeout=8)
+                    fm_r.raise_for_status()
+                    fm_data = fm_r.json()
+                    daily = fm_data.get("daily", {})
+                    if daily:
+                        dates = daily.get("time", [])[:3]
+                        codes = daily.get("weather_code", [])[:3]
+                        highs = daily.get("temperature_2m_max", [])[:3]
+                        lows  = daily.get("temperature_2m_min", [])[:3]
+                        forecast_table = (
+                            "\n\n**📅 3-Day Forecast:**\n\n"
+                            "| Date | Condition | High | Low |\n"
+                            "|---|---|---|---|\n"
+                        )
+                        for d, c_code, h, l in zip(dates, codes, highs, lows):
+                            cond = _weather_code_to_text(c_code) if c_code is not None else "—"
+                            forecast_table += f"| {d} | {cond} | {h}°C | {l}°C |\n"
+            except Exception:
+                forecast_table = ""
+
             return (
-                f"🌤 **Weather in {name}**\n\n"
-                f"🌡 Temperature: {temp}°C (Feels like {feels_like}°C)\n"
-                f"🌥 Condition: {condition}\n"
-                f"💧 Humidity: {humidity}%\n"
-                f"💨 Wind Speed: {wind} km/h\n\n"
-                f"{advice}\n\n"
-                f"_Source: Weatherstack_"
+                f"## Weather in {name}\n\n"
+                f"| Parameter | Value |\n"
+                f"|---|---|\n"
+                f"| Temperature | {temp}°C (Feels like {feels_like}°C) |\n"
+                f"| Condition | {condition} |\n"
+                f"| Humidity | {humidity}% |\n"
+                f"| Wind Speed | {wind} km/h |\n"
+                f"{forecast_table}\n\n"
+                f"**Travel Advice:** {advice}\n\n"
+                f"{_best_places_for_weather(name, condition)}\n\n"
+                f"{_pack_list(condition, temp)}\n\n"
+                f"_Source: Weatherstack + Open-Meteo_"
             )
         except requests.HTTPError as e:
             return f"❌ Weather service error for {city.title()}: HTTP {e.response.status_code}"
@@ -154,25 +249,35 @@ def get_weather(city: str) -> str:
         condition = _weather_code_to_text(code) if code is not None else "Unknown"
         advice = _travel_advice(condition, temp)
 
-        # 7-day forecast
+        # 3-day forecast table
         daily = data.get("daily", {})
-        forecast_str = ""
+        forecast_table = ""
         if daily:
-            forecast_str = _format_forecast(
-                dates=daily.get("time", []),
-                codes=daily.get("weather_code", []),
-                max_temps=daily.get("temperature_2m_max", []),
-                min_temps=daily.get("temperature_2m_min", []),
+            dates = daily.get("time", [])[:3]
+            codes = daily.get("weather_code", [])[:3]
+            highs = daily.get("temperature_2m_max", [])[:3]
+            lows  = daily.get("temperature_2m_min", [])[:3]
+            forecast_table = (
+                "\n\n**📅 3-Day Forecast:**\n\n"
+                "| Date | Condition | High | Low |\n"
+                "|---|---|---|---|\n"
             )
+            for d, c, h, l in zip(dates, codes, highs, lows):
+                cond = _weather_code_to_text(c) if c is not None else "—"
+                forecast_table += f"| {d} | {cond} | {h}°C | {l}°C |\n"
 
         return (
-            f"🌤 **Current Weather in {city.title()}**\n\n"
-            f"🌡 Temperature: {temp}°C (Feels like {feels_like}°C)\n"
-            f"💧 Humidity: {humidity}%\n"
-            f"🌥 Condition: {condition}\n"
-            f"💨 Wind Speed: {wind} km/h\n\n"
-            f"🧭 Travel Advice: {advice}\n"
-            f"{forecast_str}\n\n"
+            f"## Weather in {city.title()}\n\n"
+            f"| Parameter | Value |\n"
+            f"|---|---|\n"
+            f"| Temperature | {temp}°C (Feels like {feels_like}°C) |\n"
+            f"| Condition | {condition} |\n"
+            f"| Humidity | {humidity}% |\n"
+            f"| Wind Speed | {wind} km/h |\n"
+            f"{forecast_table}\n\n"
+            f"**Travel Advice:** {advice}\n\n"
+            f"{_best_places_for_weather(city, condition)}\n\n"
+            f"{_pack_list(condition, temp)}\n\n"
             f"_Source: Open-Meteo (real-time)_"
         )
 

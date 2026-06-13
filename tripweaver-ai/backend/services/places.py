@@ -17,6 +17,7 @@ import requests
 from typing import List, Dict, Optional
 
 from agent.error_handler import with_retry, ToolError
+from services.web_search import search_web
 
 USER_AGENT = "TripWeaverAI/1.0 (contact: support@tripweaver.ai)"
 
@@ -89,6 +90,16 @@ _STATIC_PLACES: Dict[str, List[Dict]] = {
         {"name": "Kovalam Beach", "category": "natural", "description": "Crescent-shaped beach popular for Ayurveda retreats."},
         {"name": "Padmanabhaswamy Temple", "category": "religion", "description": "Ancient Vishnu temple, one of India's wealthiest."},
     ],
+    "varanasi": [
+        {"name": "Kashi Vishwanath Temple", "category": "religion", "description": "One of India's most sacred Shiva temples and the spiritual heart of Varanasi."},
+        {"name": "Dashashwamedh Ghat", "category": "religion", "description": "Famous riverside ghat known for the evening Ganga Aarti ceremony."},
+        {"name": "Assi Ghat", "category": "religion", "description": "Popular ghat for sunrise views, boat rides, yoga, and relaxed riverside cafes."},
+        {"name": "Manikarnika Ghat", "category": "religion", "description": "Historic cremation ghat that reflects Varanasi's deep spiritual traditions."},
+        {"name": "Sarnath", "category": "historic", "description": "Important Buddhist site where Gautama Buddha gave his first sermon."},
+        {"name": "Ramnagar Fort", "category": "historic", "description": "18th-century fort and museum on the eastern bank of the Ganga."},
+        {"name": "Bharat Mata Mandir", "category": "cultural", "description": "Unique temple featuring a large marble relief map of undivided India."},
+        {"name": "Banaras Hindu University", "category": "cultural", "description": "Large historic university campus with museums, gardens, and the Vishwanath Temple."},
+    ],
 }
 
 
@@ -145,6 +156,79 @@ def _static_fallback(city: str) -> List[Dict]:
     return _STATIC_PLACES.get(city.lower(), [])
 
 
+def _enrich_with_search(city: str, places: List[Dict]) -> List[Dict]:
+    """Add descriptions to places that don't have them using DuckDuckGo."""
+    try:
+        from duckduckgo_search import DDGS
+        enriched = []
+        for p in places:
+            if p.get("description"):
+                enriched.append(p)
+                continue
+            try:
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(
+                        f"{p['name']} {city} tourist attraction India",
+                        max_results=1
+                    ))
+                desc = results[0]["body"][:120] if results else "—"
+                enriched.append({**p, "description": desc})
+            except Exception:
+                enriched.append({**p, "description": "—"})
+        return enriched
+    except Exception:
+        return places
+
+
+def _needs_description(place: Dict) -> bool:
+    """Return True when a place has no useful description."""
+    desc = (place.get("description") or "").strip()
+    return not desc or desc in {"—", "-", "N/A"}
+
+
+def _description_from_duckduckgo(place_name: str, city: str) -> Optional[str]:
+    """
+    Look up a short public-web description for a place.
+    DuckDuckGo enrichment is best-effort so the places tool still works offline.
+    """
+    query = f"{place_name} {city} tourist attraction description"
+    try:
+        results = search_web(query, max_results=3)
+    except Exception:
+        return None
+
+    for result in results:
+        snippet = (result.get("snippet") or "").strip()
+        if not snippet:
+            continue
+        if len(snippet) > 180:
+            snippet = snippet[:177].rsplit(" ", 1)[0].rstrip(".,;:") + "..."
+        return snippet
+    return None
+
+
+def _enrich_missing_descriptions(places: List[Dict], city: str, limit: int = 10) -> bool:
+    """
+    Fill missing place descriptions from DuckDuckGo snippets.
+    Returns True if at least one place was enriched.
+    """
+    enriched = False
+    checked = 0
+    for place in places:
+        if checked >= limit:
+            break
+        if not _needs_description(place):
+            continue
+
+        checked += 1
+        desc = _description_from_duckduckgo(place["name"], city)
+        if desc:
+            place["description"] = desc
+            enriched = True
+
+    return enriched
+
+
 @with_retry(max_attempts=2, delay=1.0)
 def get_places(city: str) -> str:
     """
@@ -178,21 +262,43 @@ def get_places(city: str) -> str:
             "Try a major Indian city like Goa, Jaipur, Manali, Delhi, Mumbai, or Kerala."
         )
 
-    # Group by category
-    grouped: Dict[str, List[str]] = {}
+    enriched_from_web = _enrich_missing_descriptions(places, city)
+
+    # Group by raw category key (not label) for ordered display
+    grouped: Dict[str, List[Dict]] = {}
     for p in places:
         cat = p["category"]
-        label = CATEGORY_LABELS.get(cat, "📍 Other")
-        grouped.setdefault(label, []).append(
-            f"• **{p['name']}**" + (f" — {p['description']}" if p.get("description") else "")
-        )
+        grouped.setdefault(cat, []).append(p)
 
     lines = [f"## 🗺️ Top Places in {city.title()}\n"]
-    for label, items in grouped.items():
-        lines.append(f"### {label}")
-        lines.extend(items)
+
+    # Category display names and order
+    category_order = [
+        ("historic",      "🏰 Historical Sites"),
+        ("religion",      "🛕 Religious & Pilgrimage"),
+        ("natural",       "🌿 Nature & Outdoors"),
+        ("cultural",      "🏛️ Cultural"),
+        ("architecture",  "🏗️ Architecture"),
+        ("amusements",    "🎡 Entertainment"),
+        ("shops",         "🛍️ Markets & Shopping"),
+        ("foods",         "🍽️ Food & Drink"),
+    ]
+
+    for cat_key, cat_label in category_order:
+        if cat_key not in grouped:
+            continue
+        items = grouped[cat_key]
+        lines.append(f"### {cat_label}")
+        lines.append("| Place | Description |")
+        lines.append("|---|---|")
+        for item in items:
+            name = str(item.get("name", "")).strip().replace("|", "\\|")
+            desc = str(item.get("description") or "—").strip().replace("|", "\\|")
+            lines.append(f"| **{name}** | {desc} |")
         lines.append("")
 
     source = "curated data" if static else "OpenTripMap"
+    if enriched_from_web:
+        source += " + DuckDuckGo descriptions"
     lines.append(f"_Source: {source}_")
     return "\n".join(lines).strip()

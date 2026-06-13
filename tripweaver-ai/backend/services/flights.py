@@ -213,25 +213,30 @@ def _format_flights(
 ) -> str:
     if not flights:
         return (
-            f"✈️ **Flights: {origin.title()} → {destination.title()}**\n\n"
-            f"No flights found for this route. Consider checking MakeMyTrip, "
-            f"Cleartrip, or Ixigo for the latest options."
+            f"## ✈️ Flights: {origin.title()} → {destination.title()}\n\n"
+            f"No flights found for this route. Check MakeMyTrip, Cleartrip, or Ixigo."
         )
 
     lines = [
-        f"✈️ **Flights: {origin.title()} → {destination.title()}**",
+        f"## ✈️ Flights: {origin.title()} → {destination.title()}",
         f"📅 Date: {travel_date}\n",
+        "| # | Airline | Departure | Arrival | Duration | Class | Price |",
+        "|---|---|---|---|---|---|---|",
     ]
     for i, f in enumerate(flights, 1):
         price_str = f"₹{f['price']:,.0f}" if isinstance(f['price'], (int, float)) else f"₹{f['price']}"
         lines.append(
-            f"**{i}. {f['airline']} {f['flight']}**  "
-            f"{f['dep']} → {f['arr']}  ({f['duration']})  "
-            f"| {f['class']}  | **{price_str}**"
+            f"| {i} | {f['airline']} {f['flight']} | {f['dep']} | {f['arr']} "
+            f"| {f['duration']} | {f['class']} | **{price_str}** |"
         )
 
+    # Cost insights
+    prices = [f['price'] for f in flights if isinstance(f['price'], (int, float))]
+    if prices:
+        lines.append(f"\n💡 **Cheapest:** ₹{min(prices):,.0f} · **Average:** ₹{sum(prices)/len(prices):,.0f} · **Most expensive:** ₹{max(prices):,.0f}")
+
     lines.append(f"\n_Source: {source} · Prices are indicative_")
-    lines.append("💡 Book on MakeMyTrip, Cleartrip, or airline website for confirmed fares.")
+    lines.append("📱 Book on **MakeMyTrip**, **Cleartrip**, or the airline website for confirmed fares.")
     return "\n".join(lines)
 
 

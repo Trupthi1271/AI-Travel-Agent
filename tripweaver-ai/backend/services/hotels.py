@@ -98,7 +98,7 @@ def get_hotels(city: str) -> str:
         try:
             loc = _geocode_city(city)
             if not loc:
-                return f"🏨 Hotels in {city.title()}\n\nCould not locate this city."
+                return f"## 🏨 Hotels in {city.title()}\n\nCould not locate this city."
             token = _amadeus_token(amadeus_api_key, amadeus_api_secret, amadeus_env)
             if not token:
                 return f"❌ Hotel service error for {city.title()}: Missing Amadeus credentials"
@@ -107,11 +107,24 @@ def get_hotels(city: str) -> str:
             lon = (bbox[2] + bbox[3]) / 2.0
             hotels = _amadeus_hotels_by_geocode(lat, lon, token, amadeus_env)
             if not hotels:
-                return f"🏨 Hotels in {city.title()} (Amadeus)\n\nNo hotels found near this area."
-            lines = [f"🏨 Hotels in {city.title()} (Amadeus)"]
-            lines.append("\nHotels")
-            for h in hotels[:10]:
-                lines.append(f"• {h['name']}")
+                return f"## 🏨 Hotels in {city.title()}\n\nNo hotels found near this area."
+            lines = [f"## 🏨 Hotels in {city.title()}\n"]
+            lines.append("| # | Hotel Name | Category |")
+            lines.append("|---|---|---|")
+            for i, h in enumerate(hotels[:10], 1):
+                name = h['name'].title()
+                # Infer category from name keywords
+                nl = name.lower()
+                if any(w in nl for w in ["palace", "taj", "oberoi", "leela", "grand", "luxury", "imperial"]):
+                    cat = "⭐⭐⭐⭐⭐ Luxury"
+                elif any(w in nl for w in ["sheraton", "marriott", "hilton", "hyatt", "radisson", "itc", "gateway"]):
+                    cat = "⭐⭐⭐⭐ Premium"
+                elif any(w in nl for w in ["holiday inn", "novotel", "ibis", "lemon tree", "fortune", "park"]):
+                    cat = "⭐⭐⭐ Mid-Range"
+                else:
+                    cat = "⭐⭐ Budget / Business"
+                lines.append(f"| {i} | **{name}** | {cat} |")
+            lines.append(f"\n_Source: Amadeus · Ratings estimated from hotel tier_")
             return "\n".join(lines)
         except requests.HTTPError as e:
             return f"❌ Hotel service error for {city.title()}: {e.response.status_code}"
@@ -120,27 +133,36 @@ def get_hotels(city: str) -> str:
     try:
         loc = _geocode_city(city)
         if not loc:
-            return f"🏨 Hotels in {city.title()}\n\nCould not locate this city."
+            return f"## 🏨 Hotels in {city.title()}\n\nCould not locate this city."
         hotels = _query_overpass_hotels(loc["bbox"])
         if not hotels:
-            return f"🏨 Hotels in {city.title()}\n\nNo hotels found via OpenStreetMap for this area."
-        # Simple grouping
+            return f"## 🏨 Hotels in {city.title()}\n\nNo hotels found via OpenStreetMap for this area."
+
         hostels = [h for h in hotels if (h.get("type") or "").lower() == "hostel"]
-        guests = [h for h in hotels if (h.get("type") or "").lower() == "guest_house"]
-        normal = [h for h in hotels if (h.get("type") or "").lower() == "hotel"]
-        result = [f"🏨 Hotels in {city.title()} (data: OpenStreetMap)"]
-        if normal:
-            result.append("\nHotels")
-            for h in normal[:6]:
-                result.append(f"• {h['name']}")
-        if guests:
-            result.append("\nGuest Houses")
-            for h in guests[:6]:
-                result.append(f"• {h['name']}")
-        if hostels:
-            result.append("\nHostels")
-            for h in hostels[:6]:
-                result.append(f"• {h['name']}")
+        guests  = [h for h in hotels if (h.get("type") or "").lower() == "guest_house"]
+        normal  = [h for h in hotels if (h.get("type") or "").lower() == "hotel"]
+
+        result = [f"## 🏨 Hotels in {city.title()}\n"]
+        result.append("| # | Name | Category |")
+        result.append("|---|---|---|")
+        counter = 1
+        for h in normal[:6]:
+            nl = h['name'].lower()
+            if any(w in nl for w in ["palace", "grand", "luxury", "imperial", "taj"]):
+                cat = "⭐⭐⭐⭐⭐ Luxury"
+            elif any(w in nl for w in ["resort", "heritage", "park", "gateway"]):
+                cat = "⭐⭐⭐⭐ Premium"
+            else:
+                cat = "⭐⭐⭐ Mid-Range"
+            result.append(f"| {counter} | **{h['name']}** | {cat} |")
+            counter += 1
+        for h in guests[:4]:
+            result.append(f"| {counter} | **{h['name']}** | 🏠 Guest House |")
+            counter += 1
+        for h in hostels[:4]:
+            result.append(f"| {counter} | **{h['name']}** | 🛏️ Hostel — Budget |")
+            counter += 1
+        result.append(f"\n_Source: OpenStreetMap · Ratings estimated from hotel tier_")
         return "\n".join(result)
     except requests.HTTPError as e:
         return f"❌ Hotel service error for {city.title()}: {e.response.status_code}"
