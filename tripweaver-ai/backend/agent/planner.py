@@ -131,14 +131,34 @@ General: Use ₹ · --- dividers · Keep concise · Tailor to travel style"""
 
 class TripPlanner:
     def __init__(self):
-        # Initialize LangChain ChatGroq (kept for fallback chain)
-        self.llm = ChatGroq(
-            groq_api_key=os.getenv("GROQ_API_KEY"),
-            model_name="llama-3.3-70b-versatile",  # better tool-calling than 8b
-            temperature=0.3,
-            max_tokens=1024,
-            timeout=30,
-        )
+        # LLM with Gemini fallback
+        groq_key = os.getenv("GROQ_API_KEY")
+        gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
+        self.llm = None
+        if groq_key:
+            try:
+                self.llm = ChatGroq(
+                    groq_api_key=groq_key,
+                    model_name="llama-3.3-70b-versatile",
+                    temperature=0.3,
+                    max_tokens=1024,
+                    timeout=30,
+                )
+            except Exception:
+                self.llm = None
+
+        if self.llm is None and gemini_key:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            self.llm = ChatGoogleGenerativeAI(
+                google_api_key=gemini_key,
+                model="gemini-2.0-flash",
+                temperature=0.3,
+                max_tokens=1024,
+            )
+
+        if self.llm is None:
+            raise RuntimeError("No LLM available. Set GROQ_API_KEY or GEMINI_API_KEY in .env")
 
         # Initialize memory
         self.memory = TravelMemory()
@@ -239,7 +259,11 @@ class TripPlanner:
             pass
 
         try:
-            chat_history = self.memory.get_chat_history()
+            # Only pass user messages as chat history — AI responses cause context contamination
+            from langchain_core.messages import HumanMessage as HM
+            raw_history = self.memory.get_chat_history()
+            chat_history = [m for m in raw_history if isinstance(m, HM)][-4:]
+
             if prefs:
                 pref_str = format_preferences_for_prompt(prefs)
                 if pref_str:
@@ -296,6 +320,9 @@ class TripPlanner:
     def _classify_query(text: str) -> str:
         """Classify a query into a type for DB logging."""
         t = text.lower()
+        # itinerary first — "budget trip" should be itinerary not budget
+        if any(w in t for w in ["plan", "itinerary", "trip to", "visit for"]):
+            return "itinerary"
         if any(w in t for w in ["weather", "rain", "temperature", "forecast"]):
             return "weather"
         if any(w in t for w in ["hotel", "stay", "accommodation", "hostel"]):
@@ -304,8 +331,6 @@ class TripPlanner:
             return "flight"
         if any(w in t for w in ["budget", "cost", "expense"]):
             return "budget"
-        if any(w in t for w in ["plan", "itinerary", "trip", "visit"]):
-            return "itinerary"
         if any(w in t for w in ["place", "attraction", "see", "do"]):
             return "places"
         return "general"

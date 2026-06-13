@@ -65,6 +65,9 @@ class TravelAgentState(TypedDict):
 
 def _classify_query(text: str) -> str:
     t = text.lower()
+    # Itinerary check FIRST — "plan a budget trip" should be itinerary, not budget
+    if any(w in t for w in ["plan", "itinerary", "trip to", "visit for"]):
+        return "itinerary"
     if any(w in t for w in ["weather", "rain", "temperature", "forecast", "climate"]):
         return "weather"
     if any(w in t for w in ["hotel", "stay", "accommodation", "hostel", "resort"]):
@@ -73,8 +76,6 @@ def _classify_query(text: str) -> str:
         return "flight"
     if any(w in t for w in ["budget", "cost", "expense", "inr", "₹"]):
         return "budget"
-    if any(w in t for w in ["plan", "itinerary", "trip", "visit", "days"]):
-        return "itinerary"
     if any(w in t for w in ["place", "attraction", "see", "do", "tourist"]):
         return "places"
     return "general"
@@ -115,115 +116,277 @@ def _extract_destination(text: str, current_dest: Optional[str] = None) -> Optio
     return None
 
 
+def _apply_itinerary_budget_defaults(text: str) -> str:
+    """
+    Add an explicit budget-tool instruction for itinerary requests where the user
+    gives a travel tier but no amount. This keeps "budget trip" plans grounded.
+    """
+    import re
+
+    t = text.lower()
+    is_trip_plan = any(w in t for w in ["plan", "itinerary", "trip"])
+    if not is_trip_plan:
+        return text
+
+    has_amount = bool(re.search(r"(?:₹|rs\.?|inr)\s*\d|(?:\d[\d,]*)\s*(?:₹|rs\.?|inr)", t))
+    if has_amount:
+        return text
+
+    days_match = re.search(r"(\d+)\s*(?:-| )?\s*day", t)
+    if not days_match:
+        return text
+
+    days = int(days_match.group(1))
+    per_day = None
+    if "budget" in t or "cheap" in t or "low cost" in t:
+        per_day = 5000
+    elif "comfort" in t or "mid-range" in t or "mid range" in t:
+        per_day = 8000
+    elif "luxury" in t or "premium" in t:
+        per_day = 15000
+
+    if per_day is None:
+        return text
+
+    total = per_day * days
+    return (
+        f"{text}\n\n"
+        f"Budget assumption for this itinerary: use budget_tool(\"{total},{days}\"). "
+        f"Keep the total trip budget at Rs. {total:,} unless the user gives a different amount."
+    )
+
+
 # ── LLM setup — lazy, built once on first agent_node call ────────────────────
 
 _llm = None
 _llm_with_tools = None
+_llm_provider = None
+
+
+def _build_gemini_with_tools():
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not gemini_key:
+        raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY is not set")
+
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    llm = ChatGoogleGenerativeAI(
+        google_api_key=gemini_key,
+        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        temperature=0.3,
+        max_tokens=1024,
+    )
+    return llm, llm.bind_tools(ALL_TOOLS)
+
+
+def _switch_to_gemini_fallback() -> bool:
+    """Switch the cached LLM to Gemini after a Groq runtime failure."""
+    global _llm, _llm_with_tools, _llm_provider
+    try:
+        _llm, _llm_with_tools = _build_gemini_with_tools()
+        _llm_provider = "gemini"
+        logger.warning("LLM: Switched to Gemini fallback after Groq runtime error")
+        return True
+    except Exception as exc:
+        logger.error(f"Gemini runtime fallback failed: {exc}")
+        return False
+
+
+def _clear_cached_llm() -> None:
+    """Clear cached LLM after quota/rate-limit failures."""
+    global _llm, _llm_with_tools, _llm_provider
+    _llm = None
+    _llm_with_tools = None
+    _llm_provider = None
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(token in text for token in ["resource_exhausted", "quota", "rate limit", "429"])
 
 
 def _get_llm_with_tools():
-    global _llm, _llm_with_tools
+    global _llm, _llm_with_tools, _llm_provider
     if _llm_with_tools is None:
-        _llm = ChatGroq(
-            groq_api_key=os.getenv("GROQ_API_KEY"),
-            model_name="llama-3.3-70b-versatile",
-            temperature=0.3,
-            max_tokens=1024,
-            timeout=30,
-        )
-        _llm_with_tools = _llm.bind_tools(ALL_TOOLS)
+        groq_key = os.getenv("GROQ_API_KEY")
+        gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
+        if groq_key:
+            try:
+                _llm = ChatGroq(
+                    groq_api_key=groq_key,
+                    model_name="llama-3.3-70b-versatile",
+                    temperature=0.3,
+                    max_tokens=1024,
+                    timeout=30,
+                )
+                _llm_with_tools = _llm.bind_tools(ALL_TOOLS)
+                _llm_provider = "groq"
+                logger.info("LLM: Using Groq llama-3.3-70b-versatile")
+            except Exception as e:
+                logger.warning(f"Groq failed: {e} — trying Gemini fallback")
+                _llm = None
+                _llm_with_tools = None
+                _llm_provider = None
+
+        if _llm_with_tools is None and gemini_key:
+            try:
+                _llm, _llm_with_tools = _build_gemini_with_tools()
+                _llm_provider = "gemini"
+                logger.info("LLM: Using Gemini fallback")
+            except Exception as e:
+                logger.error(f"Gemini fallback also failed: {e}")
+                raise RuntimeError("No LLM available. Set GROQ_API_KEY or GEMINI_API_KEY in .env")
+
     return _llm_with_tools
 
 
 SYSTEM_PROMPT = """You are TripWeaver, an AI Travel Concierge for Indian travelers.
 
-TOOL ROUTING — call the correct tool FIRST:
-| Query type | Tool |
+TOOL ROUTING:
+- weather/rain/temperature/forecast -> weather_tool
+- hotels/stay/accommodation -> hotel_tool
+- budget with amount AND days -> budget_tool
+- flights/airfare -> flight_tool
+- top places/attractions/sightseeing -> places_tool
+- restaurants/food/where to eat -> restaurant_tool
+- festivals/visa/news -> web_search_tool
+- save this trip -> save_itinerary_tool
+- my history/saved trips -> search_history_tool
+
+TRIP PLANNING: When user says plan a trip or plan X-day trip to City:
+Call these tools in order: weather_tool, places_tool, hotel_tool, budget_tool
+Then write ONE complete itinerary using the actual data from all tools.
+
+BUDGET RULE:
+If the user says "budget trip" but does not give an amount, assume Rs. 5,000 per day.
+If the user says "comfort trip" but does not give an amount, assume Rs. 8,000 per day.
+If the user says "luxury trip" but does not give an amount, assume Rs. 15,000 per day.
+Total budget = days x per-day amount.
+Never exceed the assumed total unless the user gives a higher budget.
+For "Plan a 3-day budget trip", call budget_tool with "15000,3".
+
+SINGLE QUERY: Call ONE tool then respond immediately.
+
+STRICT OUTPUT RULES:
+1. Use clean Markdown only.
+2. Always use pipe Markdown tables.
+3. Never output tab-separated tables.
+4. Never output plain aligned columns.
+5. Every table must have: header row, separator row, then one data row per line.
+6. Every table must look exactly like:
+| Column A | Column B |
 |---|---|
-| weather / rain / temperature | weather_tool |
-| hotels / stay / accommodation | hotel_tool |
-| budget — amount AND days given | budget_tool |
-| flights / airfare | flight_tool |
-| attractions / places / sightseeing | places_tool |
-| restaurants / food / where to eat | restaurant_tool |
-| festivals / visa / news | web_search_tool |
-| "save this trip" | save_itinerary_tool |
-| "my history" | search_history_tool |
+| Value | Value |
+7. Never put two table rows on the same line.
+8. Use Rs. only when calling budget_tool, but use the rupee symbol in the final response.
+9. The response itself should include only one main heading.
+10. Do not repeat the same title twice.
+11. For trip planning responses, always start with: ## Trip to City (X Days)
+12. Weather data inside a trip plan goes under a ### Weather Snapshot section, not as the main heading.
+13. Never call a tool that does not exist in the tool list above.
+14. NEVER answer weather/hotel/flight/places/restaurants from memory - always call the tool.
+15. Use actual data from tool results, not placeholders.
+16. Weather responses must include a "Best Places Given This Weather" table with exactly 3 places.
+17. For weather responses, paste the weather_tool output as-is and do not remove the current weather table or 3-day forecast.
 
-MULTI-TOOL RULE: When user says "plan a trip" or "plan a X-day trip to [city]":
-Call ALL of these tools in sequence: weather_tool, places_tool, hotel_tool, budget_tool.
-Merge all results into one complete travel package response.
+RESPONSE FORMAT:
 
-SINGLE-QUERY RULE: For all other queries, call ONE tool then stop immediately and respond.
+Weather:
+## Weather in City
 
-NEVER make up hotel names, flights, restaurants, or attractions.
-After tool returns, paste output then add your insights and recommendations.
-ALWAYS call the correct tool — NEVER answer weather/hotel/flight/places/restaurant questions from memory.
+| Parameter | Value |
+|---|---|
+| Temperature | actual value |
+| Condition | actual value |
+| Humidity | actual value |
+| Wind Speed | actual value |
 
-━━━ RESPONSE FORMAT ━━━
+Travel Advice: actual advice from tool
 
-Weather query:
-## 🌤️ Weather in [City]
-🌡 Temperature: X°C (Feels like X°C) · 💧 Humidity: X% · 💨 Wind: X km/h · 🌥 Condition: [condition]
-📅 7-Day Forecast:
-| Date | Condition | High | Low |
-|---|---|---|---|
-| [date] | [condition] | X°C | X°C |
-🧭 Travel Advice: [advice from tool]
-_Source: [source]_
----
-### 🗺️ Best Places Given This Weather
-| # | Place | Why it suits the weather |
-|---|---|---|
-| 1 | **[Place]** | [reason] |
-| 2 | **[Place]** | [reason] |
-| 3 | **[Place]** | [reason] |
----
-### 💡 Quick Tips
-- **Pack:** [2-3 items] · **Tip:** [one local advice]
+### Best Places Given This Weather
+
+| Place | Reason |
+|---|---|
+| actual place | actual reason |
+| actual place | actual reason |
+| actual place | actual reason |
+
+Pack: actual items based on current conditions
 
 Hotels:
-## 🏨 Hotels in [City]
-[paste hotel_tool output — every hotel name]
----
-### 💡 Booking Tips · [peak season advice] · [city tip]
+## Hotels in City
 
-Flights:
-## ✈️ Flights: [Origin] → [Destination]
-📅 Date: [date]
-| # | Airline | Departure | Arrival | Duration | Class | Price |
-|---|---|---|---|---|---|---|
-| 1 | [airline] | [time] | [time] | [duration] | ECONOMY | ₹X |
-_Source: [source]_ · Book on MakeMyTrip, Cleartrip, or airline website.
----
-### 💡 Tips · Compare fares · Early morning = cheapest
+| # | Hotel Name | Category |
+|---|---|---|
+| 1 | actual hotel | actual rating |
 
-Budget:
-## 💰 Budget Breakdown
-[paste budget_tool output — every line]
+Flights: paste exact flight table from tool as-is
+
+Budget: paste exact budget table from tool as-is
 
 Restaurants:
-## 🍽️ Where to Eat in [City]
-[paste restaurant_tool output — every restaurant]
----
-### 💡 Food Tips · [local specialty] · [best area for food]
+## Where to Eat in City
+| Restaurant | About |
+|---|---|
+| actual name | actual description |
 
-Places:
-## 🗺️ Top Places in [City]
-[paste places_tool output — every attraction with description]
+Trip Plan:
+## 3-Day Budget Trip to City
 
-Full Trip Plan (multi-tool):
-## 🗺️ [X]-Day Trip to [City]
-### 🌤️ Weather & Best Time · [weather summary]
-### 🗺️ Top Attractions · [places output]
-### 🏨 Where to Stay · [top 3-5 hotels]
-### 🍽️ Where to Eat · [top restaurants]
-### Day 1 — [Theme] | Time | Activity | Cost |
-### Day 2 — [Theme] (repeat)
-### 💰 Budget Summary | Category | Cost |
-### ✈️ Travel Tips · Best time · Getting there · Don't miss
+### Weather Snapshot
+- Condition: actual condition
+- Temperature: actual temperature
+- Travel advice: actual advice
 
-Use ₹ · --- dividers · markdown tables · keep concise"""
+### Top Attractions
+
+| Place | Description |
+|---|---|
+| actual place | actual description |
+
+### Where to Stay
+
+| # | Hotel | Category |
+|---:|---|---|
+| 1 | actual hotel | actual rating |
+
+### Day 1 - Theme
+
+| Time | Activity | Cost |
+|---|---|---:|
+| Morning | actual activity | actual cost |
+| Afternoon | actual activity | actual cost |
+| Evening | actual activity | actual cost |
+
+### Day 2 - Theme
+
+| Time | Activity | Cost |
+|---|---|---:|
+| Morning | actual activity | actual cost |
+| Afternoon | actual activity | actual cost |
+| Evening | actual activity | actual cost |
+
+### Budget Summary
+
+| Category | Total |
+|---|---:|
+| Accommodation | actual total |
+| Food | actual total |
+| Transport | actual total |
+| Activities | actual total |
+| Total | actual total |
+
+### Travel Tips
+- Best time: actual
+- Getting there: actual
+- Local tip: actual
+
+Top places:
+
+| Place | Description |
+|---|---|
+| actual place | actual description |
+"""
 
 
 # ── Graph nodes ───────────────────────────────────────────────────────────────
@@ -250,8 +413,45 @@ def classify_node(state: TravelAgentState) -> TravelAgentState:
     }
 
 
+def _direct_weather_response(destination: str) -> Optional[str]:
+    """Call weather_tool and places_tool directly — no LLM needed."""
+    try:
+        from services.weather import get_weather
+        from services.places import get_places
+        weather = get_weather(destination)
+        places_output = get_places(destination)
+        # Extract top 3 places for the "Best Places" section
+        place_lines = [l for l in places_output.split("\n") if l.startswith("| **")][:3]
+        places_table = ""
+        if place_lines:
+            places_table = (
+                "\n\n### Best Places Given This Weather\n\n"
+                "| Place | Why visit |\n|---|---|\n"
+            )
+            for line in place_lines:
+                parts = [p.strip() for p in line.split("|") if p.strip()]
+                name = parts[0].replace("**", "") if parts else "—"
+                desc = parts[1][:80] if len(parts) > 1 else "Great spot to visit"
+                places_table += f"| **{name}** | {desc} |\n"
+        return weather + places_table
+    except Exception as e:
+        logger.error(f"Direct weather response failed: {e}")
+        return None
+
+
+def _direct_places_response(destination: str) -> Optional[str]:
+    """Call places_tool directly — no LLM needed."""
+    try:
+        from services.places import get_places
+        return get_places(destination)
+    except Exception as e:
+        logger.error(f"Direct places response failed: {e}")
+        return None
+
+
 def agent_node(state: TravelAgentState) -> TravelAgentState:
     """LLM decides what to do — call a tool or respond directly."""
+    global _llm_provider
     llm_with_tools = _get_llm_with_tools()  # lazy, cached after first call
     system = SystemMessage(content=SYSTEM_PROMPT)
     recent_messages = state["messages"][-6:]
@@ -264,9 +464,24 @@ def agent_node(state: TravelAgentState) -> TravelAgentState:
         logger.debug(f"Agent LLM call: {latency_ms:.0f}ms")
     except Exception as exc:
         latency_ms = (time.perf_counter() - start) * 1000
-        logger.error(f"Agent LLM error: {exc}")
-        error_msg = AIMessage(content=f"I encountered an error: {exc}. Please try again.")
-        return {**state, "messages": [error_msg], "error": str(exc)}
+        if _llm_provider == "groq" and _switch_to_gemini_fallback():
+            try:
+                retry_start = time.perf_counter()
+                response = _get_llm_with_tools().invoke(messages)
+                retry_ms = (time.perf_counter() - retry_start) * 1000
+                logger.info(f"Agent LLM retry via Gemini: {retry_ms:.0f}ms")
+            except Exception as retry_exc:
+                logger.error(f"Agent LLM Gemini retry error: {retry_exc}")
+                if _is_quota_error(retry_exc):
+                    _clear_cached_llm()
+                error_msg = AIMessage(content=f"I encountered an error: {retry_exc}. Please try again.")
+                return {**state, "messages": [error_msg], "error": str(retry_exc)}
+        else:
+            logger.error(f"Agent LLM error: {exc}")
+            if _is_quota_error(exc):
+                _clear_cached_llm()
+            error_msg = AIMessage(content=f"I encountered an error: {exc}. Please try again.")
+            return {**state, "messages": [error_msg], "error": str(exc)}
 
     return {
         **state,
@@ -298,11 +513,11 @@ def format_node(state: TravelAgentState) -> TravelAgentState:
 
         # Validate required headers per query type
         required_headers = {
-            "weather":   "## 🌤️",
+            "weather":   "## Weather",
             "hotel":     "## 🏨",
             "flight":    "## ✈️",
             "budget":    "## 💰",
-            "itinerary": "## 🗺️",
+            "itinerary": "## Trip",
             "places":    "## 🗺️",
         }
         expected = required_headers.get(q_type)
@@ -417,6 +632,163 @@ def _get_graph():
     return _graph
 
 
+def _direct_tool_response(user_input: str) -> Optional[tuple[str, Dict[str, Any]]]:
+    """Bypass the LLM for simple single-tool queries."""
+    import re
+
+    text = user_input.lower()
+    destination = _extract_destination(user_input)
+
+    if destination and any(w in text for w in ["plan", "itinerary", "trip"]):
+        days_match = re.search(r"(\d+)\s*(?:-| )?\s*day", text)
+        if days_match:
+            from agent.budget import calculate_budget
+            from services.hotels import get_hotels
+            from services.places import get_places
+            from services.weather import get_weather
+
+            days = int(days_match.group(1))
+            amount_match = re.search(r"(?:₹|rs\.?|inr)\s*(\d[\d,]*)|(\d[\d,]*)\s*(?:₹|rs\.?|inr)", text)
+            if amount_match:
+                amount = (amount_match.group(1) or amount_match.group(2)).replace(",", "")
+            elif any(w in text for w in ["luxury", "premium"]):
+                amount = str(days * 15000)
+            elif any(w in text for w in ["comfort", "mid-range", "mid range"]):
+                amount = str(days * 8000)
+            else:
+                amount = str(days * 5000)
+
+            weather = get_weather(destination)
+            places = get_places(destination)
+            hotels = get_hotels(destination)
+            budget = calculate_budget(f"{amount},{days}")
+
+            itinerary_lines = [
+                f"## Trip to {destination} ({days} Days)",
+                "",
+                "### Weather Snapshot",
+                weather,
+                "",
+                "### Top Attractions",
+                places,
+                "",
+                "### Where to Stay",
+                hotels,
+                "",
+                "### Day-by-Day Plan",
+            ]
+            themes = ["Arrival & Local Exploration", "Sightseeing & Experiences", "Culture & Relaxed Departure"]
+            for day in range(1, days + 1):
+                theme = themes[min(day - 1, len(themes) - 1)]
+                itinerary_lines.extend([
+                    "",
+                    f"#### Day {day} - {theme}",
+                    "",
+                    "| Time | Activity | Cost |",
+                    "|---|---|---:|",
+                    f"| Morning | Visit a top attraction in {destination} | ₹500 |",
+                    f"| Afternoon | Local sightseeing and food break | ₹700 |",
+                    f"| Evening | Market/cafe walk and rest | ₹300 |",
+                ])
+            itinerary_lines.extend([
+                "",
+                "### Budget Summary",
+                budget,
+                "",
+                "### Travel Tips",
+                "- Keep outdoor activities flexible around the weather.",
+                "- Confirm hotel and transport prices before booking.",
+                "- Carry cash for local markets and small vendors.",
+            ])
+
+            return "\n".join(itinerary_lines), {
+                "path": "Direct itinerary composer",
+                "query_type": "itinerary",
+                "destination": destination,
+                "tools_called": ["weather_tool", "places_tool", "hotel_tool", "budget_tool"],
+                "iterations": 0,
+                "error": None,
+            }
+
+    if destination and any(w in text for w in ["weather", "rain", "temperature", "forecast", "climate"]):
+        from services.weather import get_weather
+        return get_weather(destination), {
+            "path": "Direct weather tool",
+            "query_type": "weather",
+            "destination": destination,
+            "tools_called": ["weather_tool"],
+            "iterations": 0,
+            "error": None,
+        }
+
+    if any(w in text for w in ["flight", "flights", "fly", "airfare"]):
+        match = re.search(r"\bfrom\s+([a-zA-Z ]+?)\s+to\s+([a-zA-Z ]+?)(?:\s+on\s+(\d{4}-\d{2}-\d{2}))?$", user_input, re.I)
+        if match:
+            from services.flights import get_flights
+            origin = match.group(1).strip()
+            dest = match.group(2).strip()
+            travel_date = match.group(3)
+            return get_flights(origin, dest, travel_date), {
+                "path": "Direct flight tool",
+                "query_type": "flight",
+                "destination": dest.title(),
+                "tools_called": ["flight_tool"],
+                "iterations": 0,
+                "error": None,
+            }
+
+    if destination and any(w in text for w in ["hotel", "hotels", "stay", "accommodation", "hostel", "resort"]):
+        from services.hotels import get_hotels
+        return get_hotels(destination), {
+            "path": "Direct hotel tool",
+            "query_type": "hotel",
+            "destination": destination,
+            "tools_called": ["hotel_tool"],
+            "iterations": 0,
+            "error": None,
+        }
+
+    if destination and any(w in text for w in ["top places", "places to visit", "visit in", "attractions", "sightseeing"]):
+        from services.places import get_places
+        return get_places(destination), {
+            "path": "Direct places tool",
+            "query_type": "places",
+            "destination": destination,
+            "tools_called": ["places_tool"],
+            "iterations": 0,
+            "error": None,
+        }
+
+    if destination and any(w in text for w in ["restaurant", "restaurants", "where to eat", "food", "cafe", "dining"]):
+        from services.restaurants import get_restaurants
+        return get_restaurants(destination), {
+            "path": "Direct restaurant tool",
+            "query_type": "restaurant",
+            "destination": destination,
+            "tools_called": ["restaurant_tool"],
+            "iterations": 0,
+            "error": None,
+        }
+
+    budget_match = re.search(r"(\d[\d,]*)\s*(?:inr|rs\.?|₹).*?(\d+)\s*(?:-| )?\s*day", text)
+    if not budget_match:
+        budget_match = re.search(r"(?:budget|₹|rs\.?|inr).*?(\d[\d,]*).*?(\d+)\s*(?:-| )?\s*day", text)
+    if budget_match and any(w in text for w in ["budget", "cost", "expense", "inr", "rs", "₹"]):
+        from agent.budget import calculate_budget
+        amount = budget_match.group(1).replace(",", "")
+        days = budget_match.group(2)
+        return calculate_budget(f"{amount},{days}"), {
+            "path": "Direct budget tool",
+            "query_type": "budget",
+            "destination": destination,
+            "tools_called": ["budget_tool"],
+            "iterations": 0,
+            "error": None,
+        }
+
+    return None
+
+
 def run_graph(
     user_input: str,
     chat_history: List[BaseMessage],
@@ -430,9 +802,26 @@ def run_graph(
     start = time.perf_counter()
     error_occurred = False
     final_state = {}
+    resolved_input = _apply_itinerary_budget_defaults(user_input)
+
+    direct = _direct_tool_response(user_input)
+    if direct:
+        response, trace = direct
+        trace = {
+            **trace,
+            "latency_ms": round((time.perf_counter() - start) * 1000),
+            "session_id": session_id,
+        }
+        metrics.record_agent_run(trace["latency_ms"], error=False)
+        logger.info(f"Direct tool response complete: {trace['latency_ms']}ms")
+        return response, trace
+
+    # Only pass user messages as context — AI responses cause contamination
+    # because the LLM confuses previous tool outputs with current query context
+    user_history = [m for m in chat_history[-4:] if isinstance(m, HumanMessage)]
 
     initial_state: TravelAgentState = {
-        "messages":        chat_history[-6:] + [HumanMessage(content=user_input)],
+        "messages":        user_history + [HumanMessage(content=resolved_input)],
         "query_type":      "general",
         "destination":     destination,
         "session_id":      session_id,

@@ -45,15 +45,16 @@ def calculate_budget(input_text: str) -> str:
             tip = "5-star resorts and premium experiences are within budget."
 
         return (
-            f"💰 **Budget Breakdown**\n\n"
-            f"Total Budget: ₹{total_budget:,.0f} for {days} day{'s' if days > 1 else ''}\n"
-            f"Daily Budget: ₹{per_day:,.0f}/day\n"
-            f"Travel Tier: {tier}\n\n"
-            f"**Suggested Daily Split:**\n"
-            f"  🏨 Accommodation: ₹{accommodation:,.0f}\n"
-            f"  🍽 Food: ₹{food:,.0f}\n"
-            f"  🚌 Transport: ₹{transport:,.0f}\n"
-            f"  🎯 Activities: ₹{activities:,.0f}\n\n"
+            f"## 💰 Budget Breakdown\n\n"
+            f"**Total:** ₹{total_budget:,.0f} for {days} day{'s' if days > 1 else ''} · "
+            f"**Daily:** ₹{per_day:,.0f}/day · **Tier:** {tier}\n\n"
+            f"| Category | Per Day | Total ({days}d) |\n"
+            f"|---|---|---|\n"
+            f"| 🏨 Accommodation | ₹{accommodation:,.0f} | ₹{accommodation*days:,.0f} |\n"
+            f"| 🍽️ Food | ₹{food:,.0f} | ₹{food*days:,.0f} |\n"
+            f"| 🚌 Transport | ₹{transport:,.0f} | ₹{transport*days:,.0f} |\n"
+            f"| 🎯 Activities | ₹{activities:,.0f} | ₹{activities*days:,.0f} |\n"
+            f"| **Total** | **₹{per_day:,.0f}** | **₹{total_budget:,.0f}** |\n\n"
             f"💡 {tip}"
         )
 
