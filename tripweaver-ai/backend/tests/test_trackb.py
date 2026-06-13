@@ -157,7 +157,7 @@ class TestGraphState:
     def test_classify_query_budget(self):
         from agent.graph import _classify_query
         assert _classify_query("My budget is ₹15000 for 3 days") == "budget"
-        assert _classify_query("cost of trip to Goa") == "budget"
+        assert _classify_query("how much will it cost?") == "budget"
 
     def test_classify_query_itinerary(self):
         from agent.graph import _classify_query
